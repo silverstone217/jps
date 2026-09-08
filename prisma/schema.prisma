@@ -1,0 +1,761 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ======================================================
+// ENUMS
+// ======================================================
+
+enum Role {
+  MANAGER
+  EMPLOYEE
+}
+
+enum Currency {
+  CDF
+  USD
+  EUR
+}
+
+enum BottleSize {
+  ML_200
+  ML_500
+}
+
+enum Unit {
+  PIECE
+  GRAM
+  KILOGRAM
+  MILLILITER
+  LITER
+}
+
+enum PaymentMethod {
+  CASH
+  MOBILE_MONEY
+  CARD
+  OTHER
+}
+
+enum LossCategory {
+  RAW_INGREDIENT
+  PACKAGING
+  FINISHED_PRODUCT
+}
+
+enum LossReason {
+  EXPIRED
+  DAMAGED
+  STOLEN
+  QUAL_REJECT
+  OTHER
+}
+
+enum LoyaltyTransactionType {
+  EARN
+  REDEEM
+  ADJUSTMENT
+}
+
+enum InvoiceStatus {
+  GENERATED
+  SENT
+  PRINTED
+  CANCELLED
+}
+
+enum InvoiceDeliveryMethod {
+  WHATSAPP
+  PRINT
+  BOTH
+}
+
+// ======================================================
+// 1. USERS
+// ======================================================
+
+model User {
+  id String @id @default(cuid())
+
+  email     String? @unique
+  name      String
+  telephone String  @unique
+  image     String?
+  password  String
+
+  role Role @default(EMPLOYEE)
+
+  isActive     Boolean   @default(true) @map("is_active")
+  isBanned     Boolean   @default(false) @map("is_banned")
+  banExpiresAt DateTime? @map("ban_expires_at")
+  banReason    String?   @map("ban_reason")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shopOwner Shop? @relation("ShopOwner")
+
+  assignments      StaffAssignment[]
+  productions      Production[]
+  transfersCreated StockTransfer[]
+  sales            Sale[]
+  losses           Loss[]
+
+  @@index([role])
+  @@index([isActive])
+}
+
+// ======================================================
+// 2. SHOP
+// ======================================================
+
+model Shop {
+  id String @id @default(cuid())
+
+  singleton String @unique @default("MAIN")
+
+  name      String
+  logo      String?
+  slogan    String?
+  telephone String
+  email     String?
+  address   String
+  currency  Currency @default(CDF)
+
+  ownerId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User? @relation("ShopOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  pointsOfSale     PointOfSale[]
+  staffAssignments StaffAssignment[]
+  rawIngredients   RawIngredient[]
+  packagings       Packaging[]
+  recipes          Recipe[]
+  products         Product[]
+
+  @@index([name])
+}
+
+// ======================================================
+// 3. POINTS DE VENTE
+// ======================================================
+
+model PointOfSale {
+  id String @id @default(cuid())
+
+  shopId String
+
+  name      String
+  code      String
+  telephone String?
+  address   String?
+
+  isMainStore Boolean @default(false)
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  staffAssignments StaffAssignment[]
+  finishedStocks   FinishedStock[]
+
+  transfersFrom StockTransfer[] @relation("TransferFrom")
+  transfersTo   StockTransfer[] @relation("TransferTo")
+
+  sales  Sale[]
+  losses Loss[]
+
+  productions Production[]
+
+  @@unique([shopId, code])
+  @@index([shopId])
+  @@index([shopId, isMainStore])
+}
+
+// ======================================================
+// 4. AFFECTATION DU PERSONNEL
+// ======================================================
+
+model StaffAssignment {
+  id String @id @default(cuid())
+
+  userId        String
+  shopId        String
+  pointOfSaleId String
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  pointOfSale PointOfSale @relation(fields: [pointOfSaleId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([shopId])
+  @@index([pointOfSaleId])
+  @@index([userId, isActive])
+  @@index([pointOfSaleId, isActive])
+}
+
+// ======================================================
+// 5. MATIÈRES PREMIÈRES
+// ======================================================
+
+model RawIngredient {
+  id String @id @default(cuid())
+
+  shopId String
+
+  name String
+  unit Unit
+
+  stockQty Decimal @default(0) @db.Decimal(14, 3)
+  minAlert Decimal @default(5) @db.Decimal(14, 3)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  recipeItems      RecipeItem[]
+  purchases        RawMaterialPurchase[]
+  productionUsages ProductionIngredient[]
+  losses           Loss[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+// ======================================================
+// 6. EMBALLAGES
+// ======================================================
+
+model Packaging {
+  id String @id @default(cuid())
+
+  shopId String
+
+  name       String
+  size       BottleSize
+  capacityMl Int
+
+  stockQty Int @default(0)
+  minAlert Int @default(50)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  variants         ProductVariant[]
+  purchases        RawMaterialPurchase[]
+  productionUsages ProductionPackaging[]
+  losses           Loss[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+// ======================================================
+// 7. ACHATS
+// ======================================================
+
+model RawMaterialPurchase {
+  id String @id @default(cuid())
+
+  ingredientId String?
+  packagingId  String?
+
+  quantity Decimal @db.Decimal(14, 3)
+
+  unitCost  Decimal @db.Decimal(14, 2)
+  totalCost Decimal @db.Decimal(14, 2)
+
+  supplier String?
+
+  purchaseDate DateTime @default(now())
+
+  ingredient RawIngredient? @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  packaging  Packaging?     @relation(fields: [packagingId], references: [id], onDelete: SetNull)
+
+  @@index([ingredientId])
+  @@index([packagingId])
+  @@index([purchaseDate])
+}
+
+// ======================================================
+// 8. RECETTES
+// ======================================================
+
+model Recipe {
+  id String @id @default(cuid())
+
+  shopId String
+
+  name        String
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  items    RecipeItem[]
+  products Product[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+// ======================================================
+// 9. COMPOSITION DES RECETTES
+// ======================================================
+
+model RecipeItem {
+  id String @id @default(cuid())
+
+  recipeId     String
+  ingredientId String
+
+  quantityPerLiter Decimal @db.Decimal(14, 3)
+
+  recipe     Recipe        @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient RawIngredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeId, ingredientId])
+  @@index([ingredientId])
+}
+
+// ======================================================
+// 10. PRODUITS
+// ======================================================
+
+model Product {
+  id String @id @default(cuid())
+
+  shopId String
+
+  name        String
+  description String?
+
+  recipeId String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop   Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  recipe Recipe? @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+
+  variants ProductVariant[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+// ======================================================
+// 11. VARIANTES DE PRODUITS
+// ======================================================
+
+model ProductVariant {
+  id String @id @default(cuid())
+
+  productId   String
+  packagingId String
+
+  sku String @unique
+
+  price Decimal @db.Decimal(14, 2)
+
+  shelfLifeDays Int @default(2)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  packaging Packaging @relation(fields: [packagingId], references: [id], onDelete: Restrict)
+
+  stocks          FinishedStock[]
+  stockLots       FinishedStockLot[]
+  saleItems       SaleItem[]
+  productionItems ProductionItem[]
+  transfers       StockTransferItem[]
+  losses          Loss[]
+
+  @@index([productId])
+  @@index([packagingId])
+}
+
+// ======================================================
+// 12. STOCK DES PRODUITS FINIS
+// ======================================================
+
+model FinishedStock {
+  id String @id @default(cuid())
+
+  pointOfSaleId String
+  variantId     String
+
+  quantity Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  pointOfSale PointOfSale    @relation(fields: [pointOfSaleId], references: [id], onDelete: Restrict)
+  variant     ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  lots FinishedStockLot[]
+
+  @@unique([pointOfSaleId, variantId])
+  @@index([variantId])
+}
+
+// ======================================================
+// 13. LOTS DU STOCK FINI
+// ======================================================
+
+model FinishedStockLot {
+  id String @id @default(cuid())
+
+  finishedStockId  String
+  productionItemId String
+
+  quantity Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  finishedStock    FinishedStock   @relation(fields: [finishedStockId], references: [id], onDelete: Restrict)
+  productionItem   ProductionItem  @relation(fields: [productionItemId], references: [id], onDelete: Restrict)
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
+  productVariantId String?
+
+  @@unique([finishedStockId, productionItemId])
+  @@index([productionItemId])
+}
+
+// ======================================================
+// 14. PRODUCTION
+// ======================================================
+
+model Production {
+  id String @id @default(cuid())
+
+  managerId     String
+  pointOfSaleId String
+
+  totalVolumeMl Decimal @db.Decimal(14, 3)
+
+  notes String?
+
+  producedAt DateTime @default(now())
+
+  manager     User        @relation(fields: [managerId], references: [id], onDelete: Restrict)
+  pointOfSale PointOfSale @relation(fields: [pointOfSaleId], references: [id], onDelete: Restrict)
+
+  ingredients ProductionIngredient[]
+  packagings  ProductionPackaging[]
+  items       ProductionItem[]
+
+  @@index([managerId])
+  @@index([pointOfSaleId])
+  @@index([producedAt])
+}
+
+// ======================================================
+// 15. MATIÈRES PREMIÈRES UTILISÉES
+// ======================================================
+
+model ProductionIngredient {
+  id String @id @default(cuid())
+
+  productionId String
+  ingredientId String
+
+  quantityUsed Decimal @db.Decimal(14, 3)
+
+  production Production    @relation(fields: [productionId], references: [id], onDelete: Cascade)
+  ingredient RawIngredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([productionId, ingredientId])
+  @@index([ingredientId])
+}
+
+// ======================================================
+// 16. EMBALLAGES UTILISÉS
+// ======================================================
+
+model ProductionPackaging {
+  id String @id @default(cuid())
+
+  productionId String
+  packagingId  String
+
+  quantityUsed Int
+
+  production Production @relation(fields: [productionId], references: [id], onDelete: Cascade)
+  packaging  Packaging  @relation(fields: [packagingId], references: [id], onDelete: Restrict)
+
+  @@unique([productionId, packagingId])
+  @@index([packagingId])
+}
+
+// ======================================================
+// 17. LOTS DE PRODUCTION
+// ======================================================
+
+model ProductionItem {
+  id String @id @default(cuid())
+
+  productionId String
+  variantId    String
+
+  quantityProduced  Int
+  remainingQuantity Int
+
+  expiresAt DateTime
+
+  production Production     @relation(fields: [productionId], references: [id], onDelete: Cascade)
+  variant    ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  stockLots FinishedStockLot[]
+
+  @@index([variantId])
+  @@index([expiresAt])
+  @@index([productionId])
+}
+
+// ======================================================
+// 18. TRANSFERTS ENTRE PDV
+// ======================================================
+
+model StockTransfer {
+  id String @id @default(cuid())
+
+  fromPosId String
+  toPosId   String
+
+  createdById String
+
+  transferredAt DateTime @default(now())
+
+  fromPos PointOfSale @relation("TransferFrom", fields: [fromPosId], references: [id], onDelete: Restrict)
+  toPos   PointOfSale @relation("TransferTo", fields: [toPosId], references: [id], onDelete: Restrict)
+
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  items StockTransferItem[]
+
+  @@index([fromPosId])
+  @@index([toPosId])
+  @@index([createdById])
+  @@index([transferredAt])
+}
+
+// ======================================================
+// 19. ARTICLES TRANSFÉRÉS
+// ======================================================
+
+model StockTransferItem {
+  id String @id @default(cuid())
+
+  transferId String
+  variantId  String
+
+  quantity Int
+
+  transfer StockTransfer  @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([transferId])
+  @@index([variantId])
+}
+
+// ======================================================
+// 20. CLIENTS
+// ======================================================
+
+model Customer {
+  id String @id @default(cuid())
+
+  name  String?
+  phone String  @unique
+
+  loyaltyPoints Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales               Sale[]
+  loyaltyTransactions LoyaltyTransaction[]
+
+  @@index([phone])
+}
+
+// ======================================================
+// 21. VENTES
+// ======================================================
+
+model Sale {
+  id String @id @default(cuid())
+
+  receiptNumber String @unique
+
+  pointOfSaleId String
+  sellerId      String
+  customerId    String?
+
+  subtotal       Decimal @db.Decimal(14, 2)
+  discountAmount Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal @db.Decimal(14, 2)
+
+  pointsEarned Int @default(0)
+  pointsUsed   Int @default(0)
+
+  paymentMethod PaymentMethod @default(CASH)
+
+  createdAt DateTime @default(now())
+
+  pointOfSale PointOfSale @relation(fields: [pointOfSaleId], references: [id], onDelete: Restrict)
+  seller      User        @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  customer    Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  items               SaleItem[]
+  invoice             Invoice?
+  loyaltyTransactions LoyaltyTransaction[]
+
+  @@index([pointOfSaleId])
+  @@index([sellerId])
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+// ======================================================
+// 22. LIGNES DE VENTE
+// ======================================================
+
+model SaleItem {
+  id String @id @default(cuid())
+
+  saleId    String
+  variantId String
+
+  quantity Int
+
+  unitPrice Decimal @db.Decimal(14, 2)
+  subtotal  Decimal @db.Decimal(14, 2)
+
+  sale    Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([variantId])
+}
+
+// ======================================================
+// 23. FIDÉLITÉ
+// ======================================================
+
+model LoyaltyTransaction {
+  id String @id @default(cuid())
+
+  customerId String
+  saleId     String?
+
+  type LoyaltyTransactionType
+
+  points       Int
+  balanceAfter Int
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  sale     Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([saleId])
+  @@index([createdAt])
+}
+
+// ======================================================
+// 24. FACTURES
+// ======================================================
+
+model Invoice {
+  id String @id @default(cuid())
+
+  saleId String @unique
+
+  invoiceNumber String @unique
+
+  status InvoiceStatus @default(GENERATED)
+
+  deliveryMethod InvoiceDeliveryMethod?
+
+  whatsappSentAt DateTime?
+  printedAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+}
+
+// ======================================================
+// 25. PERTES
+// ======================================================
+
+model Loss {
+  id String @id @default(cuid())
+
+  category LossCategory
+  reason   LossReason
+
+  note String?
+
+  pointOfSaleId String?
+
+  ingredientId String?
+  packagingId  String?
+  variantId    String?
+
+  quantity Decimal @db.Decimal(14, 3)
+
+  reportedById String
+
+  reportedAt DateTime @default(now())
+
+  pointOfSale PointOfSale?    @relation(fields: [pointOfSaleId], references: [id], onDelete: SetNull)
+  ingredient  RawIngredient?  @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  packaging   Packaging?      @relation(fields: [packagingId], references: [id], onDelete: SetNull)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  reportedBy User @relation(fields: [reportedById], references: [id], onDelete: Restrict)
+
+  @@index([category])
+  @@index([reason])
+  @@index([pointOfSaleId])
+  @@index([reportedById])
+  @@index([reportedAt])
+}
