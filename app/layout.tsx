@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { initializeApp } from "@/lib/initialization";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,7 +18,9 @@ export const metadata: Metadata = {
   description: "Application de gestion de Jus Jardin",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  await initializeApp();
+
   return (
     <html
       lang="fr"
