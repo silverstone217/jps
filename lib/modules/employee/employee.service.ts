@@ -144,23 +144,16 @@ const normalizeEmail = (email: string) => {
  * appartenant au manager connecté.
  */
 export const getEmployees = async (managerId: string) => {
-  const shop = await getShopByOwnerId(managerId);
+  // Vérifie simplement que le manager possède bien la boutique.
+  await getShopByOwnerId(managerId);
 
   const employees = await prisma.user.findMany({
     where: {
       role: "EMPLOYEE",
-
-      assignments: {
-        some: {
-          shopId: shop.id,
-        },
-      },
     },
-
     orderBy: {
       createdAt: "desc",
     },
-
     select: employeeSelect,
   });
 
@@ -172,20 +165,14 @@ export const getEmployees = async (managerId: string) => {
  * du manager connecté.
  */
 export const getEmployee = async (managerId: string, employeeId: string) => {
-  const shop = await getShopByOwnerId(managerId);
+  // Vérifie que le manager possède bien la boutique.
+  await getShopByOwnerId(managerId);
 
   const employee = await prisma.user.findFirst({
     where: {
       id: employeeId,
       role: "EMPLOYEE",
-
-      assignments: {
-        some: {
-          shopId: shop.id,
-        },
-      },
     },
-
     select: employeeSelect,
   });
 
