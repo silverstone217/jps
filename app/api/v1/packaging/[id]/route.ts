@@ -7,6 +7,7 @@ import { authorize } from "@/lib/modules/auth/authorize";
 import {
   deletePackaging,
   getPackaging,
+  //   setPackagingActive,
   updatePackaging,
 } from "@/lib/modules/packaging/packaging.service";
 
@@ -23,11 +24,11 @@ interface RouteContext {
   }>;
 }
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   try {
     const payload = await authorize(request, ALLOWED_ROLES);
 
-    const { id } = await params;
+    const { id } = await context.params;
 
     const packaging = await getPackaging(payload.userId, id);
 
@@ -36,7 +37,9 @@ export async function GET(request: Request, { params }: RouteContext) {
         success: true,
         packaging,
       },
-      { status: 200 },
+      {
+        status: 200,
+      },
     );
   } catch (error) {
     if (error instanceof Error) {
@@ -47,7 +50,9 @@ export async function GET(request: Request, { params }: RouteContext) {
               success: false,
               message: "Non autorisé",
             },
-            { status: 401 },
+            {
+              status: 401,
+            },
           );
 
         case "FORBIDDEN":
@@ -56,7 +61,9 @@ export async function GET(request: Request, { params }: RouteContext) {
               success: false,
               message: "Accès interdit",
             },
-            { status: 403 },
+            {
+              status: 403,
+            },
           );
 
         case "SHOP_NOT_FOUND":
@@ -65,7 +72,9 @@ export async function GET(request: Request, { params }: RouteContext) {
               success: false,
               message: "Boutique introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
 
         case "PACKAGING_NOT_FOUND":
@@ -74,7 +83,9 @@ export async function GET(request: Request, { params }: RouteContext) {
               success: false,
               message: "Emballage introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
       }
     }
@@ -86,16 +97,18 @@ export async function GET(request: Request, { params }: RouteContext) {
         success: false,
         message: "Une erreur interne est survenue",
       },
-      { status: 500 },
+      {
+        status: 500,
+      },
     );
   }
 }
 
-export async function PATCH(request: Request, { params }: RouteContext) {
+export async function PATCH(request: Request, context: RouteContext) {
   try {
     const payload = await authorize(request, ALLOWED_ROLES);
 
-    const { id } = await params;
+    const { id } = await context.params;
 
     const body = await request.json();
 
@@ -111,7 +124,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
           success: false,
           message,
         },
-        { status: 400 },
+        {
+          status: 400,
+        },
       );
     }
 
@@ -123,7 +138,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
         message: "Emballage modifié avec succès",
         packaging,
       },
-      { status: 200 },
+      {
+        status: 200,
+      },
     );
   } catch (error) {
     if (error instanceof Error) {
@@ -134,7 +151,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
               success: false,
               message: "Non autorisé",
             },
-            { status: 401 },
+            {
+              status: 401,
+            },
           );
 
         case "FORBIDDEN":
@@ -143,7 +162,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
               success: false,
               message: "Accès interdit",
             },
-            { status: 403 },
+            {
+              status: 403,
+            },
           );
 
         case "SHOP_NOT_FOUND":
@@ -152,7 +173,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
               success: false,
               message: "Boutique introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
 
         case "PACKAGING_NOT_FOUND":
@@ -161,25 +184,32 @@ export async function PATCH(request: Request, { params }: RouteContext) {
               success: false,
               message: "Emballage introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
 
         case "PACKAGING_ALREADY_EXISTS":
           return NextResponse.json(
             {
               success: false,
-              message: "Cet emballage existe déjà",
+              message: "Un emballage avec ce nom et cette taille existe déjà",
             },
-            { status: 409 },
+            {
+              status: 409,
+            },
           );
 
         case "INVALID_PACKAGING_CAPACITY":
           return NextResponse.json(
             {
               success: false,
-              message: "La capacité ne correspond pas au format de l'emballage",
+              message:
+                "La capacité de l'emballage ne correspond pas à sa taille",
             },
-            { status: 400 },
+            {
+              status: 400,
+            },
           );
       }
     }
@@ -191,16 +221,18 @@ export async function PATCH(request: Request, { params }: RouteContext) {
         success: false,
         message: "Une erreur interne est survenue",
       },
-      { status: 500 },
+      {
+        status: 500,
+      },
     );
   }
 }
 
-export async function DELETE(request: Request, { params }: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
   try {
     const payload = await authorize(request, ALLOWED_ROLES);
 
-    const { id } = await params;
+    const { id } = await context.params;
 
     const result = deletePackagingSchema.safeParse({
       id,
@@ -216,7 +248,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
           success: false,
           message,
         },
-        { status: 400 },
+        {
+          status: 400,
+        },
       );
     }
 
@@ -227,7 +261,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
         success: true,
         message: "Emballage supprimé avec succès",
       },
-      { status: 200 },
+      {
+        status: 200,
+      },
     );
   } catch (error) {
     if (error instanceof Error) {
@@ -238,7 +274,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
               success: false,
               message: "Non autorisé",
             },
-            { status: 401 },
+            {
+              status: 401,
+            },
           );
 
         case "FORBIDDEN":
@@ -247,7 +285,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
               success: false,
               message: "Accès interdit",
             },
-            { status: 403 },
+            {
+              status: 403,
+            },
           );
 
         case "SHOP_NOT_FOUND":
@@ -256,7 +296,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
               success: false,
               message: "Boutique introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
 
         case "PACKAGING_NOT_FOUND":
@@ -265,7 +307,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
               success: false,
               message: "Emballage introuvable",
             },
-            { status: 404 },
+            {
+              status: 404,
+            },
           );
 
         case "PACKAGING_HAS_HISTORY":
@@ -273,9 +317,11 @@ export async function DELETE(request: Request, { params }: RouteContext) {
             {
               success: false,
               message:
-                "Cet emballage ne peut pas être supprimé car il possède un historique.",
+                "Cet emballage ne peut pas être supprimé car il est déjà utilisé dans l'historique.",
             },
-            { status: 409 },
+            {
+              status: 409,
+            },
           );
 
         case "PACKAGING_HAS_STOCK":
@@ -283,9 +329,11 @@ export async function DELETE(request: Request, { params }: RouteContext) {
             {
               success: false,
               message:
-                "Cet emballage ne peut pas être supprimé car son stock est supérieur à zéro.",
+                "Cet emballage ne peut pas être supprimé car son stock est encore supérieur à zéro.",
             },
-            { status: 409 },
+            {
+              status: 409,
+            },
           );
       }
     }
@@ -297,7 +345,9 @@ export async function DELETE(request: Request, { params }: RouteContext) {
         success: false,
         message: "Une erreur interne est survenue",
       },
-      { status: 500 },
+      {
+        status: 500,
+      },
     );
   }
 }

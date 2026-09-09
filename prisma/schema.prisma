@@ -276,7 +276,7 @@ model Packaging {
   productionUsages ProductionPackaging[]
   losses           Loss[]
 
-  @@unique([shopId, name])
+  @@unique([shopId, name, size])
   @@index([shopId])
 }
 

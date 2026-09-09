@@ -5,6 +5,7 @@ import type {
   CreatePackagingInput,
   UpdatePackagingInput,
 } from "./packaging.schema";
+
 import { Prisma } from "@/app/generated/prisma/client";
 
 const packagingSelect = {
@@ -33,16 +34,13 @@ const mapPackaging = (packaging: PackagingEntity) => {
 
     // Toujours retourner des primitives JS au client
     capacityMl: Number(packaging.capacityMl),
-
     stockQty: Number(packaging.stockQty),
-
     minAlert: Number(packaging.minAlert),
 
     isActive: packaging.isActive,
 
     // Éviter de laisser des objets Date Prisma
     createdAt: packaging.createdAt.toISOString(),
-
     updatedAt: packaging.updatedAt.toISOString(),
   };
 };
@@ -135,6 +133,8 @@ export const createPackaging = async (
 
   validatePackagingSize(data.size, data.capacityMl);
 
+  // Le même nom est autorisé pour une taille différente.
+  // L'unicité est donc : shop + nom + taille.
   const existingPackaging = await prisma.packaging.findFirst({
     where: {
       shopId: shop.id,
@@ -142,6 +142,7 @@ export const createPackaging = async (
         equals: name,
         mode: "insensitive",
       },
+      size: data.size,
     },
     select: {
       id: true,
@@ -192,6 +193,8 @@ export const updatePackaging = async (
 
   validatePackagingSize(data.size, data.capacityMl);
 
+  // Le même nom est autorisé pour une taille différente.
+  // On exclut l'emballage actuellement modifié.
   const existingPackaging = await prisma.packaging.findFirst({
     where: {
       shopId: shop.id,
@@ -199,6 +202,7 @@ export const updatePackaging = async (
         equals: name,
         mode: "insensitive",
       },
+      size: data.size,
       NOT: {
         id: packagingId,
       },
