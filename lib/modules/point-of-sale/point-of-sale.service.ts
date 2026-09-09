@@ -37,20 +37,12 @@ export const pointOfSaleSelect = {
           sku: true,
           price: true,
 
-          // ==================================================
-          // PRODUIT
-          // ==================================================
-
           product: {
             select: {
               id: true,
               name: true,
             },
           },
-
-          // ==================================================
-          // EMBALLAGE
-          // ==================================================
 
           packaging: {
             select: {
@@ -103,7 +95,7 @@ export const pointOfSaleSelect = {
 } as const;
 
 // ============================================================
-// VÉRIFIER LA BOUTIQUE
+// VÉRIFIER LA BOUTIQUE DU MANAGER
 // ============================================================
 
 const getShopByOwnerId = async (userId: string) => {
@@ -111,6 +103,7 @@ const getShopByOwnerId = async (userId: string) => {
     where: {
       ownerId: userId,
     },
+
     select: {
       id: true,
       name: true,
@@ -199,6 +192,39 @@ const getPointOfSaleStats = async (pointOfSaleId: string) => {
 };
 
 // ============================================================
+// DÉSIGNER UN POS COMME MAGASIN PRINCIPAL
+// ============================================================
+//
+// Cette fonction est utilisée uniquement à l'intérieur
+// d'une transaction.
+//
+// Elle retire automatiquement le statut principal à tous
+// les autres POS de la boutique.
+//
+// Résultat : un seul POS principal maximum.
+//
+
+const setMainStore = async (
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  shopId: string,
+  pointOfSaleId: string,
+) => {
+  await tx.pointOfSale.updateMany({
+    where: {
+      shopId,
+      isMainStore: true,
+      id: {
+        not: pointOfSaleId,
+      },
+    },
+
+    data: {
+      isMainStore: false,
+    },
+  });
+};
+
+// ============================================================
 // CRÉER UN POINT DE VENTE
 // ============================================================
 
@@ -216,9 +242,17 @@ export const createPointOfSale = async (
   const isMainStore = data.isMainStore ?? false;
   const isActive = data.isActive ?? true;
 
-  // ----------------------------------------------------------
-  // Vérifier que le code n'existe pas déjà
-  // ----------------------------------------------------------
+  // ==========================================================
+  // UN POS PRINCIPAL DOIT ÊTRE ACTIF
+  // ==========================================================
+
+  if (isMainStore && !isActive) {
+    throw new Error("MAIN_STORE_MUST_BE_ACTIVE");
+  }
+
+  // ==========================================================
+  // VÉRIFIER LE CODE
+  // ==========================================================
 
   const existingCode = await prisma.pointOfSale.findUnique({
     where: {
@@ -237,25 +271,15 @@ export const createPointOfSale = async (
     throw new Error("POINT_OF_SALE_CODE_ALREADY_EXISTS");
   }
 
-  // ----------------------------------------------------------
-  // Création
-  // ----------------------------------------------------------
+  // ==========================================================
+  // CRÉATION
+  // ==========================================================
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
-    // Si ce POS devient le magasin principal,
-    // retirer le statut principal aux autres POS.
-
+    // Si ce POS devient le principal,
+    // l'ancien principal perd automatiquement ce statut.
     if (isMainStore) {
-      await tx.pointOfSale.updateMany({
-        where: {
-          shopId: shop.id,
-          isMainStore: true,
-        },
-
-        data: {
-          isMainStore: false,
-        },
-      });
+      await setMainStore(tx, shop.id, "TEMP");
     }
 
     return tx.pointOfSale.create({
@@ -272,10 +296,6 @@ export const createPointOfSale = async (
       select: pointOfSaleSelect,
     });
   });
-
-  // ----------------------------------------------------------
-  // Ajouter les statistiques
-  // ----------------------------------------------------------
 
   const stats = await getPointOfSaleStats(pointOfSale.id);
 
@@ -306,9 +326,9 @@ export const updatePointOfSale = async (
   const telephone = data.telephone?.trim() || null;
   const address = data.address?.trim() || null;
 
-  // ----------------------------------------------------------
-  // Vérifier le nouveau code
-  // ----------------------------------------------------------
+  // ==========================================================
+  // VÉRIFIER LE NOUVEAU CODE
+  // ==========================================================
 
   if (code !== existingPointOfSale.code) {
     const existingCode = await prisma.pointOfSale.findUnique({
@@ -329,27 +349,47 @@ export const updatePointOfSale = async (
     }
   }
 
+  // ==========================================================
+  // VALEURS FINALES
+  // ==========================================================
+
   const isMainStore = data.isMainStore ?? existingPointOfSale.isMainStore;
 
   const isActive = data.isActive ?? existingPointOfSale.isActive;
 
-  // ----------------------------------------------------------
-  // Le magasin principal ne peut pas être désactivé
-  // ----------------------------------------------------------
+  // ==========================================================
+  // LE PRINCIPAL DOIT RESTER ACTIF
+  // ==========================================================
+
+  if (isMainStore && !isActive) {
+    throw new Error("MAIN_STORE_MUST_BE_ACTIVE");
+  }
+
+  // ==========================================================
+  // UN POS PRINCIPAL NE PEUT PAS ÊTRE DÉSACTIVÉ
+  // ==========================================================
+  //
+  // Cette vérification est conservée explicitement pour
+  // protéger le magasin principal actuel.
+  //
 
   if (existingPointOfSale.isMainStore && !isActive) {
     throw new Error("MAIN_STORE_CANNOT_BE_DEACTIVATED");
   }
 
-  // ----------------------------------------------------------
-  // Mise à jour
-  // ----------------------------------------------------------
+  // ==========================================================
+  // MISE À JOUR
+  // ==========================================================
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
-    // Si ce POS devient le magasin principal,
-    // retirer le statut principal aux autres POS.
+    // --------------------------------------------------------
+    // SI CE POS DEVIENT LE NOUVEAU PRINCIPAL
+    // --------------------------------------------------------
+    //
+    // L'ancien principal devient automatiquement un POS normal.
+    //
 
-    if (isMainStore && !existingPointOfSale.isMainStore) {
+    if (isMainStore) {
       await tx.pointOfSale.updateMany({
         where: {
           shopId: shop.id,
@@ -383,10 +423,6 @@ export const updatePointOfSale = async (
     });
   });
 
-  // ----------------------------------------------------------
-  // Ajouter les statistiques
-  // ----------------------------------------------------------
-
   const stats = await getPointOfSaleStats(pointOfSale.id);
 
   return {
@@ -407,17 +443,17 @@ export const deletePointOfSale = async (
 
   const pointOfSale = await getPointOfSaleForShop(pointOfSaleId, shop.id);
 
-  // ----------------------------------------------------------
-  // Le magasin principal ne peut pas être supprimé
-  // ----------------------------------------------------------
+  // ==========================================================
+  // LE PRINCIPAL NE PEUT PAS ÊTRE SUPPRIMÉ
+  // ==========================================================
 
   if (pointOfSale.isMainStore) {
     throw new Error("MAIN_STORE_CANNOT_BE_DELETED");
   }
 
-  // ----------------------------------------------------------
-  // Vérifier les données liées
-  // ----------------------------------------------------------
+  // ==========================================================
+  // VÉRIFIER LES DONNÉES LIÉES
+  // ==========================================================
 
   const [
     staffAssignmentCount,
@@ -484,9 +520,9 @@ export const deletePointOfSale = async (
     throw new Error("POINT_OF_SALE_HAS_RELATED_DATA");
   }
 
-  // ----------------------------------------------------------
-  // Suppression
-  // ----------------------------------------------------------
+  // ==========================================================
+  // SUPPRESSION
+  // ==========================================================
 
   await prisma.pointOfSale.delete({
     where: {
@@ -526,9 +562,9 @@ export const getPointOfSales = async (userId: string) => {
     ],
   });
 
-  // ----------------------------------------------------------
-  // Récupérer les statistiques de tous les POS
-  // ----------------------------------------------------------
+  // ==========================================================
+  // AJOUTER LES STATISTIQUES
+  // ==========================================================
 
   const pointOfSalesWithStats = await Promise.all(
     pointOfSales.map(async (pointOfSale) => {
@@ -563,10 +599,6 @@ export const getPointOfSale = async (userId: string, pointOfSaleId: string) => {
   if (!pointOfSale) {
     throw new Error("POINT_OF_SALE_NOT_FOUND");
   }
-
-  // ----------------------------------------------------------
-  // Ajouter les statistiques
-  // ----------------------------------------------------------
 
   const stats = await getPointOfSaleStats(pointOfSale.id);
 
