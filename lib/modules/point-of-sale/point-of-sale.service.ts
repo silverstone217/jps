@@ -74,6 +74,7 @@ export const pointOfSaleSelect = {
       id: true,
       isActive: true,
       createdAt: true,
+      updatedAt: true,
 
       user: {
         select: {
@@ -84,6 +85,7 @@ export const pointOfSaleSelect = {
           image: true,
           role: true,
           isActive: true,
+          isBanned: true,
         },
       },
     },
@@ -148,7 +150,7 @@ const getPointOfSaleForShop = async (pointOfSaleId: string, shopId: string) => {
 };
 
 // ============================================================
-// STATISTIQUES
+// STATISTIQUES DU POINT DE VENTE
 // ============================================================
 
 const getPointOfSaleStats = async (pointOfSaleId: string) => {
@@ -188,6 +190,31 @@ const getPointOfSaleStats = async (pointOfSaleId: string) => {
 };
 
 // ============================================================
+// RÉCUPÉRER UN POS COMPLET AVEC STATISTIQUES
+// ============================================================
+
+const getCompletePointOfSale = async (pointOfSaleId: string) => {
+  const pointOfSale = await prisma.pointOfSale.findUnique({
+    where: {
+      id: pointOfSaleId,
+    },
+
+    select: pointOfSaleSelect,
+  });
+
+  if (!pointOfSale) {
+    throw new Error("POINT_OF_SALE_NOT_FOUND");
+  }
+
+  const stats = await getPointOfSaleStats(pointOfSale.id);
+
+  return {
+    ...pointOfSale,
+    ...stats,
+  };
+};
+
+// ============================================================
 // CRÉER UN POINT DE VENTE
 // ============================================================
 
@@ -201,7 +228,6 @@ export const createPointOfSale = async (
   const code = data.code.trim().toUpperCase();
   const telephone = data.telephone?.trim() || null;
   const address = data.address?.trim() || null;
-
   const isMainStore = data.isMainStore ?? false;
   const isActive = data.isActive ?? true;
 
@@ -242,10 +268,6 @@ export const createPointOfSale = async (
     // --------------------------------------------------------
     // SI LE NOUVEAU POS EST PRINCIPAL
     // --------------------------------------------------------
-    //
-    // On retire le statut principal à TOUS les autres POS
-    // de cette boutique AVANT de créer le nouveau.
-    //
 
     if (isMainStore) {
       await tx.pointOfSale.updateMany({
@@ -365,14 +387,8 @@ export const updatePointOfSale = async (
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
     // --------------------------------------------------------
-    // SI CE POS EST PRINCIPAL
+    // SI CE POS DEVIENT PRINCIPAL
     // --------------------------------------------------------
-    //
-    // Tous les autres POS de la boutique deviennent normaux.
-    //
-    // IMPORTANT :
-    // On exclut le POS actuel.
-    //
 
     if (isMainStore) {
       await tx.pointOfSale.updateMany({
@@ -546,9 +562,11 @@ export const getPointOfSales = async (userId: string) => {
       {
         isMainStore: "desc",
       },
+
       {
         isActive: "desc",
       },
+
       {
         name: "asc",
       },
@@ -595,4 +613,177 @@ export const getPointOfSale = async (userId: string, pointOfSaleId: string) => {
     ...pointOfSale,
     ...stats,
   };
+};
+
+// ============================================================
+// AFFECTER UN EMPLOYÉ À UN POINT DE VENTE
+// ============================================================
+
+export const assignEmployeeToPointOfSale = async (
+  userId: string,
+  pointOfSaleId: string,
+  employeeId: string,
+) => {
+  // ==========================================================
+  // VÉRIFIER LA BOUTIQUE
+  // ==========================================================
+
+  const shop = await getShopByOwnerId(userId);
+
+  // ==========================================================
+  // VÉRIFIER LE POS
+  // ==========================================================
+
+  const pointOfSale = await getPointOfSaleForShop(pointOfSaleId, shop.id);
+
+  // ==========================================================
+  // LE POS DOIT ÊTRE ACTIF
+  // ==========================================================
+
+  if (!pointOfSale.isActive) {
+    throw new Error("POINT_OF_SALE_INACTIVE");
+  }
+
+  // ==========================================================
+  // VÉRIFIER L'EMPLOYÉ
+  // ==========================================================
+
+  const employee = await prisma.user.findFirst({
+    where: {
+      id: employeeId,
+      role: "EMPLOYEE",
+      isActive: true,
+      isBanned: false,
+    },
+
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      telephone: true,
+      image: true,
+      role: true,
+      isActive: true,
+      isBanned: true,
+    },
+  });
+
+  if (!employee) {
+    throw new Error("EMPLOYEE_NOT_FOUND");
+  }
+
+  // ==========================================================
+  // VÉRIFIER SI L'EMPLOYÉ EST DÉJÀ AFFECTÉ
+  // ==========================================================
+
+  const existingAssignment = await prisma.staffAssignment.findFirst({
+    where: {
+      userId: employee.id,
+      isActive: true,
+    },
+
+    select: {
+      id: true,
+      pointOfSaleId: true,
+    },
+  });
+
+  // ==========================================================
+  // UN EMPLOYÉ NE PEUT AVOIR QU'UNE AFFECTATION ACTIVE
+  // ==========================================================
+
+  if (existingAssignment) {
+    if (existingAssignment.pointOfSaleId === pointOfSaleId) {
+      throw new Error("EMPLOYEE_ALREADY_ASSIGNED_TO_THIS_POINT_OF_SALE");
+    }
+
+    throw new Error("EMPLOYEE_ALREADY_ASSIGNED");
+  }
+
+  // ==========================================================
+  // CRÉER L'AFFECTATION
+  // ==========================================================
+
+  await prisma.staffAssignment.create({
+    data: {
+      userId: employee.id,
+      shopId: shop.id,
+      pointOfSaleId,
+      isActive: true,
+    },
+  });
+
+  // ==========================================================
+  // RÉCUPÉRER LE POS MIS À JOUR
+  // ==========================================================
+
+  return getCompletePointOfSale(pointOfSaleId);
+};
+
+// ============================================================
+// RETIRER UN EMPLOYÉ D'UN POINT DE VENTE
+// ============================================================
+
+export const removeEmployeeFromPointOfSale = async (
+  userId: string,
+  pointOfSaleId: string,
+  employeeId: string,
+) => {
+  // ==========================================================
+  // VÉRIFIER LA BOUTIQUE
+  // ==========================================================
+
+  const shop = await getShopByOwnerId(userId);
+
+  // ==========================================================
+  // VÉRIFIER LE POS
+  // ==========================================================
+
+  await getPointOfSaleForShop(pointOfSaleId, shop.id);
+
+  // ==========================================================
+  // VÉRIFIER L'AFFECTATION ACTIVE
+  // ==========================================================
+
+  const assignment = await prisma.staffAssignment.findFirst({
+    where: {
+      userId: employeeId,
+      shopId: shop.id,
+      pointOfSaleId,
+      isActive: true,
+    },
+
+    select: {
+      id: true,
+    },
+  });
+
+  if (!assignment) {
+    throw new Error("EMPLOYEE_ASSIGNMENT_NOT_FOUND");
+  }
+
+  // ==========================================================
+  // DÉSACTIVER L'AFFECTATION
+  // ==========================================================
+  //
+  // IMPORTANT :
+  // On ne supprime pas l'enregistrement.
+  // On conserve l'historique.
+  //
+
+  await prisma.staffAssignment.update({
+    where: {
+      id: assignment.id,
+    },
+
+    data: {
+      isActive: false,
+    },
+  });
+
+  // ==========================================================
+  // RÉCUPÉRER LE POS MIS À JOUR
+  // ==========================================================
+
+  return getCompletePointOfSale(pointOfSaleId);
 };

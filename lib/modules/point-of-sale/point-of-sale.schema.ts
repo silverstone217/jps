@@ -92,6 +92,16 @@ export const updatePointOfSaleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+// ============================================================
+// AFFECTER UN EMPLOYÉ
+// ============================================================
+
+export const assignEmployeeSchema = z.object({
+  employeeId: z.string().trim().min(1, "L'identifiant de l'employé est requis"),
+});
+
+export type AssignEmployeeInput = z.infer<typeof assignEmployeeSchema>;
+
 export type UpdatePointOfSaleInput = z.infer<typeof updatePointOfSaleSchema>;
 
 /**
