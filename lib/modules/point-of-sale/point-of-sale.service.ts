@@ -34,13 +34,30 @@ export const pointOfSaleSelect = {
       variant: {
         select: {
           id: true,
-          name: true,
-          volumeMl: true,
+          sku: true,
+          price: true,
+
+          // ==================================================
+          // PRODUIT
+          // ==================================================
 
           product: {
             select: {
               id: true,
               name: true,
+            },
+          },
+
+          // ==================================================
+          // EMBALLAGE
+          // ==================================================
+
+          packaging: {
+            select: {
+              id: true,
+              name: true,
+              size: true,
+              capacityMl: true,
             },
           },
         },
@@ -94,7 +111,6 @@ const getShopByOwnerId = async (userId: string) => {
     where: {
       ownerId: userId,
     },
-
     select: {
       id: true,
       name: true,
@@ -228,6 +244,7 @@ export const createPointOfSale = async (
   const pointOfSale = await prisma.$transaction(async (tx) => {
     // Si ce POS devient le magasin principal,
     // retirer le statut principal aux autres POS.
+
     if (isMainStore) {
       await tx.pointOfSale.updateMany({
         where: {
@@ -331,6 +348,7 @@ export const updatePointOfSale = async (
   const pointOfSale = await prisma.$transaction(async (tx) => {
     // Si ce POS devient le magasin principal,
     // retirer le statut principal aux autres POS.
+
     if (isMainStore && !existingPointOfSale.isMainStore) {
       await tx.pointOfSale.updateMany({
         where: {
