@@ -3,11 +3,10 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
+
 import ShopService from "@/lib/modules/shop/shop.service";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER"];
-const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 // ============================================================
 // POST /api/v1/shop/image
@@ -15,17 +14,29 @@ const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export async function POST(request: Request) {
   try {
+    // ==========================================================
+    // AUTHENTIFICATION
+    // ==========================================================
+
     const payload = await authorize(request, ALLOWED_ROLES);
+
+    // ==========================================================
+    // RÉCUPÉRER LE FORM DATA
+    // ==========================================================
 
     const formData = await request.formData();
 
-    const image = formData.get("image");
+    const file = formData.get("image");
 
-    if (!(image instanceof File)) {
+    // ==========================================================
+    // VÉRIFIER LE FICHIER
+    // ==========================================================
+
+    if (!(file instanceof File)) {
       return NextResponse.json(
         {
           success: false,
-          message: "Aucune image fournie",
+          message: "Aucune image n'a été fournie",
         },
         {
           status: 400,
@@ -33,11 +44,17 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!ALLOWED_IMAGE_TYPES.includes(image.type)) {
+    // ==========================================================
+    // VÉRIFIER LE TYPE
+    // ==========================================================
+
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+    if (!allowedTypes.includes(file.type)) {
       return NextResponse.json(
         {
           success: false,
-          message: "Format d'image non supporté",
+          message: "Format d'image non supporté. Utilisez JPG, PNG ou WEBP.",
         },
         {
           status: 400,
@@ -45,11 +62,17 @@ export async function POST(request: Request) {
       );
     }
 
-    if (image.size > MAX_IMAGE_SIZE) {
+    // ==========================================================
+    // VÉRIFIER LA TAILLE
+    // ==========================================================
+
+    const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
+
+    if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
         {
           success: false,
-          message: "L'image ne doit pas dépasser 5 Mo",
+          message: "L'image ne doit pas dépasser 2 Mo.",
         },
         {
           status: 400,
@@ -57,22 +80,23 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Upload de l'image vers le stockage.
-     *
-     * Ici on récupère l'URL publique de l'image.
-     *
-     * Exemple :
-     *
-     * const logoUrl = await uploadShopImage(
-     *   image,
-     *   payload.userId,
-     * );
-     */
+    // ==========================================================
+    // CONVERTIR EN BUFFER
+    // ==========================================================
 
-    const logoUrl = "IMAGE_UPLOAD_URL";
+    const arrayBuffer = await file.arrayBuffer();
 
-    const shop = await ShopService.updateShopLogo(payload.userId, logoUrl);
+    const buffer = Buffer.from(arrayBuffer);
+
+    // ==========================================================
+    // UPLOAD + MODIFICATION DE LA BOUTIQUE
+    // ==========================================================
+
+    const shop = await ShopService.updateShopLogo(payload.userId, buffer);
+
+    // ==========================================================
+    // RÉPONSE
+    // ==========================================================
 
     return NextResponse.json(
       {
@@ -119,6 +143,17 @@ export async function POST(request: Request) {
               status: 404,
             },
           );
+
+        case "CLOUDINARY_UPLOAD_FAILED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Impossible de télécharger l'image.",
+            },
+            {
+              status: 500,
+            },
+          );
       }
     }
 
@@ -142,9 +177,21 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    // ==========================================================
+    // AUTHENTIFICATION
+    // ==========================================================
+
     const payload = await authorize(request, ALLOWED_ROLES);
 
+    // ==========================================================
+    // SUPPRIMER L'IMAGE
+    // ==========================================================
+
     const shop = await ShopService.removeShopLogo(payload.userId);
+
+    // ==========================================================
+    // RÉPONSE
+    // ==========================================================
 
     return NextResponse.json(
       {
