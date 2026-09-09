@@ -19,28 +19,23 @@ const rawIngredientSelect = {
   updatedAt: true,
 } as const;
 
-type RawIngredientPrisma = Prisma.RawIngredientGetPayload<{
+type RawIngredientEntity = Prisma.RawIngredientGetPayload<{
   select: typeof rawIngredientSelect;
 }>;
 
-/**
- * Transforme la réponse Prisma en données sûres
- * pour l'API/client mobile.
- *
- * Decimal -> number
- * Date -> string ISO
- */
-const mapRawIngredient = (ingredient: RawIngredientPrisma) => ({
-  id: ingredient.id,
-  shopId: ingredient.shopId,
-  name: ingredient.name,
-  unit: ingredient.unit,
-  stockQty: ingredient.stockQty.toNumber(),
-  minAlert: ingredient.minAlert.toNumber(),
-  isActive: ingredient.isActive,
-  createdAt: ingredient.createdAt.toISOString(),
-  updatedAt: ingredient.updatedAt.toISOString(),
-});
+const mapRawIngredient = (ingredient: RawIngredientEntity) => {
+  return {
+    id: ingredient.id,
+    shopId: ingredient.shopId,
+    name: ingredient.name,
+    unit: ingredient.unit,
+    stockQty: ingredient.stockQty.toNumber(),
+    minAlert: ingredient.minAlert.toNumber(),
+    isActive: ingredient.isActive,
+    createdAt: ingredient.createdAt.toISOString(),
+    updatedAt: ingredient.updatedAt.toISOString(),
+  };
+};
 
 const getShopByOwnerId = async (managerId: string) => {
   const shop = await prisma.shop.findUnique({
