@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     // VÉRIFIER LA TAILLE
     // ==========================================================
 
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+    const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
