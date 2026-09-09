@@ -1,14 +1,11 @@
 import { prisma } from "@/lib/prisma";
+
 import type {
   AdjustRawIngredientStockInput,
   CreateRawIngredientInput,
   UpdateRawIngredientInput,
 } from "./raw-ingredient.schema";
 import { Prisma } from "@/app/generated/prisma/client";
-
-// ============================================================
-// SELECT
-// ============================================================
 
 const rawIngredientSelect = {
   id: true,
@@ -22,9 +19,28 @@ const rawIngredientSelect = {
   updatedAt: true,
 } as const;
 
-// ============================================================
-// SHOP
-// ============================================================
+type RawIngredientPrisma = Prisma.RawIngredientGetPayload<{
+  select: typeof rawIngredientSelect;
+}>;
+
+/**
+ * Transforme la réponse Prisma en données sûres
+ * pour l'API/client mobile.
+ *
+ * Decimal -> number
+ * Date -> string ISO
+ */
+const mapRawIngredient = (ingredient: RawIngredientPrisma) => ({
+  id: ingredient.id,
+  shopId: ingredient.shopId,
+  name: ingredient.name,
+  unit: ingredient.unit,
+  stockQty: ingredient.stockQty.toNumber(),
+  minAlert: ingredient.minAlert.toNumber(),
+  isActive: ingredient.isActive,
+  createdAt: ingredient.createdAt.toISOString(),
+  updatedAt: ingredient.updatedAt.toISOString(),
+});
 
 const getShopByOwnerId = async (managerId: string) => {
   const shop = await prisma.shop.findUnique({
@@ -42,10 +58,6 @@ const getShopByOwnerId = async (managerId: string) => {
 
   return shop;
 };
-
-// ============================================================
-// GET ONE
-// ============================================================
 
 const getRawIngredientForShop = async (
   ingredientId: string,
@@ -66,14 +78,10 @@ const getRawIngredientForShop = async (
   return ingredient;
 };
 
-// ============================================================
-// GET ALL
-// ============================================================
-
 export const getRawIngredients = async (managerId: string) => {
   const shop = await getShopByOwnerId(managerId);
 
-  return prisma.rawIngredient.findMany({
+  const ingredients = await prisma.rawIngredient.findMany({
     where: {
       shopId: shop.id,
     },
@@ -87,11 +95,9 @@ export const getRawIngredients = async (managerId: string) => {
     ],
     select: rawIngredientSelect,
   });
-};
 
-// ============================================================
-// GET ONE
-// ============================================================
+  return ingredients.map(mapRawIngredient);
+};
 
 export const getRawIngredient = async (
   managerId: string,
@@ -99,12 +105,10 @@ export const getRawIngredient = async (
 ) => {
   const shop = await getShopByOwnerId(managerId);
 
-  return getRawIngredientForShop(ingredientId, shop.id);
-};
+  const ingredient = await getRawIngredientForShop(ingredientId, shop.id);
 
-// ============================================================
-// CREATE
-// ============================================================
+  return mapRawIngredient(ingredient);
+};
 
 export const createRawIngredient = async (
   managerId: string,
@@ -132,7 +136,7 @@ export const createRawIngredient = async (
   }
 
   try {
-    return await prisma.rawIngredient.create({
+    const ingredient = await prisma.rawIngredient.create({
       data: {
         shopId: shop.id,
         name,
@@ -143,6 +147,8 @@ export const createRawIngredient = async (
       },
       select: rawIngredientSelect,
     });
+
+    return mapRawIngredient(ingredient);
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -154,10 +160,6 @@ export const createRawIngredient = async (
     throw error;
   }
 };
-
-// ============================================================
-// UPDATE
-// ============================================================
 
 export const updateRawIngredient = async (
   managerId: string,
@@ -191,7 +193,7 @@ export const updateRawIngredient = async (
   }
 
   try {
-    return await prisma.rawIngredient.update({
+    const ingredient = await prisma.rawIngredient.update({
       where: {
         id: ingredientId,
       },
@@ -205,6 +207,8 @@ export const updateRawIngredient = async (
       },
       select: rawIngredientSelect,
     });
+
+    return mapRawIngredient(ingredient);
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -217,10 +221,6 @@ export const updateRawIngredient = async (
   }
 };
 
-// ============================================================
-// ACTIVATE / DEACTIVATE
-// ============================================================
-
 export const setRawIngredientActive = async (
   managerId: string,
   ingredientId: string,
@@ -230,7 +230,7 @@ export const setRawIngredientActive = async (
 
   await getRawIngredientForShop(ingredientId, shop.id);
 
-  return prisma.rawIngredient.update({
+  const ingredient = await prisma.rawIngredient.update({
     where: {
       id: ingredientId,
     },
@@ -239,11 +239,9 @@ export const setRawIngredientActive = async (
     },
     select: rawIngredientSelect,
   });
-};
 
-// ============================================================
-// ADJUST STOCK
-// ============================================================
+  return mapRawIngredient(ingredient);
+};
 
 export const adjustRawIngredientStock = async (
   managerId: string,
@@ -264,7 +262,7 @@ export const adjustRawIngredientStock = async (
     throw new Error("INSUFFICIENT_RAW_INGREDIENT_STOCK");
   }
 
-  return prisma.rawIngredient.update({
+  const updatedIngredient = await prisma.rawIngredient.update({
     where: {
       id: ingredientId,
     },
@@ -273,11 +271,9 @@ export const adjustRawIngredientStock = async (
     },
     select: rawIngredientSelect,
   });
-};
 
-// ============================================================
-// DELETE
-// ============================================================
+  return mapRawIngredient(updatedIngredient);
+};
 
 export const deleteRawIngredient = async (
   managerId: string,
