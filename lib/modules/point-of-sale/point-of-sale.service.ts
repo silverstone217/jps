@@ -148,34 +148,30 @@ const getPointOfSaleForShop = async (pointOfSaleId: string, shopId: string) => {
 };
 
 // ============================================================
-// RÉCUPÉRER LES STATISTIQUES D'UN POINT DE VENTE
+// STATISTIQUES
 // ============================================================
 
 const getPointOfSaleStats = async (pointOfSaleId: string) => {
   const [finishedStockCount, salesCount, lossCount, productionCount] =
     await Promise.all([
-      // Nombre de lignes de stock de produits finis
       prisma.finishedStock.count({
         where: {
           pointOfSaleId,
         },
       }),
 
-      // Nombre total de ventes
       prisma.sale.count({
         where: {
           pointOfSaleId,
         },
       }),
 
-      // Nombre total de pertes
       prisma.loss.count({
         where: {
           pointOfSaleId,
         },
       }),
 
-      // Nombre total de productions
       prisma.production.count({
         where: {
           pointOfSaleId,
@@ -189,39 +185,6 @@ const getPointOfSaleStats = async (pointOfSaleId: string) => {
     lossCount,
     productionCount,
   };
-};
-
-// ============================================================
-// DÉSIGNER UN POS COMME MAGASIN PRINCIPAL
-// ============================================================
-//
-// Cette fonction est utilisée uniquement à l'intérieur
-// d'une transaction.
-//
-// Elle retire automatiquement le statut principal à tous
-// les autres POS de la boutique.
-//
-// Résultat : un seul POS principal maximum.
-//
-
-const setMainStore = async (
-  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
-  shopId: string,
-  pointOfSaleId: string,
-) => {
-  await tx.pointOfSale.updateMany({
-    where: {
-      shopId,
-      isMainStore: true,
-      id: {
-        not: pointOfSaleId,
-      },
-    },
-
-    data: {
-      isMainStore: false,
-    },
-  });
 };
 
 // ============================================================
@@ -243,7 +206,7 @@ export const createPointOfSale = async (
   const isActive = data.isActive ?? true;
 
   // ==========================================================
-  // UN POS PRINCIPAL DOIT ÊTRE ACTIF
+  // LE PRINCIPAL DOIT ÊTRE ACTIF
   // ==========================================================
 
   if (isMainStore && !isActive) {
@@ -276,11 +239,30 @@ export const createPointOfSale = async (
   // ==========================================================
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
-    // Si ce POS devient le principal,
-    // l'ancien principal perd automatiquement ce statut.
+    // --------------------------------------------------------
+    // SI LE NOUVEAU POS EST PRINCIPAL
+    // --------------------------------------------------------
+    //
+    // On retire le statut principal à TOUS les autres POS
+    // de cette boutique AVANT de créer le nouveau.
+    //
+
     if (isMainStore) {
-      await setMainStore(tx, shop.id, "TEMP");
+      await tx.pointOfSale.updateMany({
+        where: {
+          shopId: shop.id,
+          isMainStore: true,
+        },
+
+        data: {
+          isMainStore: false,
+        },
+      });
     }
+
+    // --------------------------------------------------------
+    // CRÉER LE POS
+    // --------------------------------------------------------
 
     return tx.pointOfSale.create({
       data: {
@@ -296,6 +278,10 @@ export const createPointOfSale = async (
       select: pointOfSaleSelect,
     });
   });
+
+  // ==========================================================
+  // STATISTIQUES
+  // ==========================================================
 
   const stats = await getPointOfSaleStats(pointOfSale.id);
 
@@ -358,7 +344,7 @@ export const updatePointOfSale = async (
   const isActive = data.isActive ?? existingPointOfSale.isActive;
 
   // ==========================================================
-  // LE PRINCIPAL DOIT RESTER ACTIF
+  // LE PRINCIPAL DOIT ÊTRE ACTIF
   // ==========================================================
 
   if (isMainStore && !isActive) {
@@ -366,12 +352,8 @@ export const updatePointOfSale = async (
   }
 
   // ==========================================================
-  // UN POS PRINCIPAL NE PEUT PAS ÊTRE DÉSACTIVÉ
+  // LE PRINCIPAL ACTUEL NE PEUT PAS ÊTRE DÉSACTIVÉ
   // ==========================================================
-  //
-  // Cette vérification est conservée explicitement pour
-  // protéger le magasin principal actuel.
-  //
 
   if (existingPointOfSale.isMainStore && !isActive) {
     throw new Error("MAIN_STORE_CANNOT_BE_DEACTIVATED");
@@ -383,10 +365,13 @@ export const updatePointOfSale = async (
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
     // --------------------------------------------------------
-    // SI CE POS DEVIENT LE NOUVEAU PRINCIPAL
+    // SI CE POS EST PRINCIPAL
     // --------------------------------------------------------
     //
-    // L'ancien principal devient automatiquement un POS normal.
+    // Tous les autres POS de la boutique deviennent normaux.
+    //
+    // IMPORTANT :
+    // On exclut le POS actuel.
     //
 
     if (isMainStore) {
@@ -405,6 +390,10 @@ export const updatePointOfSale = async (
       });
     }
 
+    // --------------------------------------------------------
+    // MISE À JOUR DU POS
+    // --------------------------------------------------------
+
     return tx.pointOfSale.update({
       where: {
         id: pointOfSaleId,
@@ -422,6 +411,10 @@ export const updatePointOfSale = async (
       select: pointOfSaleSelect,
     });
   });
+
+  // ==========================================================
+  // STATISTIQUES
+  // ==========================================================
 
   const stats = await getPointOfSaleStats(pointOfSale.id);
 
@@ -561,10 +554,6 @@ export const getPointOfSales = async (userId: string) => {
       },
     ],
   });
-
-  // ==========================================================
-  // AJOUTER LES STATISTIQUES
-  // ==========================================================
 
   const pointOfSalesWithStats = await Promise.all(
     pointOfSales.map(async (pointOfSale) => {
