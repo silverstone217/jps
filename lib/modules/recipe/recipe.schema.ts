@@ -10,12 +10,12 @@ export const recipeItemSchema = z.object({
     .trim()
     .min(1, "L'identifiant de la matière première est requis"),
 
-  quantityPerLiter: z
+  quantity: z
     .number({
-      error: "La quantité par litre est requise",
+      error: "La quantité est requise",
     })
-    .positive("La quantité par litre doit être supérieure à 0")
-    .finite("La quantité par litre doit être un nombre valide"),
+    .positive("La quantité doit être supérieure à 0")
+    .finite("La quantité doit être un nombre valide"),
 });
 
 export type RecipeItemInput = z.infer<typeof recipeItemSchema>;
@@ -37,6 +37,13 @@ export const createRecipeSchema = z.object({
     .max(500, "La description ne peut pas dépasser 500 caractères")
     .optional()
     .or(z.literal("")),
+
+  productionVolumeMl: z
+    .number({
+      error: "Le volume de production est requis",
+    })
+    .int("Le volume de production doit être un nombre entier")
+    .positive("Le volume de production doit être supérieur à 0"),
 
   items: z
     .array(recipeItemSchema)
@@ -63,6 +70,13 @@ export const updateRecipeSchema = z.object({
     .max(500, "La description ne peut pas dépasser 500 caractères")
     .optional()
     .or(z.literal("")),
+
+  productionVolumeMl: z
+    .number({
+      error: "Le volume de production est requis",
+    })
+    .int("Le volume de production doit être un nombre entier")
+    .positive("Le volume de production doit être supérieur à 0"),
 
   items: z
     .array(
@@ -94,7 +108,7 @@ export interface RecipeItemData {
   id: string;
   recipeId: string;
   ingredientId: string;
-  quantityPerLiter: number;
+  quantity: number;
 }
 
 export interface RecipeData {
@@ -102,6 +116,7 @@ export interface RecipeData {
   shopId: string;
   name: string;
   description: string | null;
+  productionVolumeMl: number;
   createdAt: string;
   updatedAt: string;
   items: RecipeItemData[];

@@ -312,18 +312,15 @@ model RawMaterialPurchase {
 // ======================================================
 
 model Recipe {
-  id String @id @default(cuid())
+  id                 String   @id @default(cuid())
+  shopId             String
+  name               String
+  description        String?
+  productionVolumeMl Int      @default(2000)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  shopId String
-
-  name        String
-  description String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
+  shop     Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
   items    RecipeItem[]
   products Product[]
 
@@ -336,12 +333,10 @@ model Recipe {
 // ======================================================
 
 model RecipeItem {
-  id String @id @default(cuid())
-
+  id           String  @id @default(cuid())
   recipeId     String
   ingredientId String
-
-  quantityPerLiter Decimal @db.Decimal(14, 3)
+  quantity     Decimal @db.Decimal(14, 3)
 
   recipe     Recipe        @relation(fields: [recipeId], references: [id], onDelete: Cascade)
   ingredient RawIngredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)

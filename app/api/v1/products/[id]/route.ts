@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-
 import type { Role } from "@/app/generated/prisma/client";
-
 import { authorize } from "@/lib/modules/auth/authorize";
 import {
   deleteProduct,

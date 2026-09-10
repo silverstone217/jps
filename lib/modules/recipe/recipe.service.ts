@@ -2,21 +2,17 @@ import { Prisma } from "@/app/generated/prisma/client";
 
 import { prisma } from "@/lib/prisma";
 
-// ======================================================
-// CONFIGURATION
-// ======================================================
-
-const MAIN_SHOP_SINGLETON = "MAIN";
-
-// ======================================================
-// TYPES
-// ======================================================
-
 import type {
   CreateRecipeInput,
   RecipeData,
   UpdateRecipeInput,
 } from "./recipe.schema";
+
+// ======================================================
+// CONFIGURATION
+// ======================================================
+
+const MAIN_SHOP_SINGLETON = "MAIN";
 
 // ======================================================
 // SELECT
@@ -27,6 +23,7 @@ const recipeSelect = {
   shopId: true,
   name: true,
   description: true,
+  productionVolumeMl: true,
   createdAt: true,
   updatedAt: true,
 
@@ -39,7 +36,7 @@ const recipeSelect = {
       id: true,
       recipeId: true,
       ingredientId: true,
-      quantityPerLiter: true,
+      quantity: true,
     },
   },
 } satisfies Prisma.RecipeSelect;
@@ -53,6 +50,7 @@ async function getMainShop() {
     where: {
       singleton: MAIN_SHOP_SINGLETON,
     },
+
     select: {
       id: true,
     },
@@ -79,6 +77,8 @@ function mapRecipe(
     shopId: recipe.shopId,
     name: recipe.name,
     description: recipe.description,
+    productionVolumeMl: recipe.productionVolumeMl,
+
     createdAt: recipe.createdAt.toISOString(),
     updatedAt: recipe.updatedAt.toISOString(),
 
@@ -86,7 +86,7 @@ function mapRecipe(
       id: item.id,
       recipeId: item.recipeId,
       ingredientId: item.ingredientId,
-      quantityPerLiter: Number(item.quantityPerLiter),
+      quantity: Number(item.quantity),
     })),
   };
 }
@@ -99,7 +99,7 @@ async function validateRecipeItems(
   shopId: string,
   items: Array<{
     ingredientId: string;
-    quantityPerLiter: number;
+    quantity: number;
   }>,
 ) {
   // --------------------------------------------------
@@ -131,6 +131,7 @@ async function validateRecipeItems(
       id: {
         in: ingredientIds,
       },
+
       shopId,
     },
 
@@ -277,10 +278,13 @@ export async function createRecipe(
           ? input.description.trim()
           : null,
 
+        productionVolumeMl: input.productionVolumeMl,
+
         items: {
           create: input.items.map((item) => ({
             ingredientId: item.ingredientId,
-            quantityPerLiter: new Prisma.Decimal(item.quantityPerLiter),
+
+            quantity: new Prisma.Decimal(item.quantity),
           })),
         },
       },
@@ -317,6 +321,7 @@ export async function updateRecipe(
     select: {
       id: true,
       shopId: true,
+
       items: {
         select: {
           id: true,
@@ -378,9 +383,9 @@ export async function updateRecipe(
   // --------------------------------------------------
 
   const recipe = await prisma.$transaction(async (tx) => {
-    // ----------------------------------------------
+    // ------------------------------------------
     // SUPPRESSION DES ITEMS RETIRÉS
-    // ----------------------------------------------
+    // ------------------------------------------
 
     if (itemIdsToDelete.length > 0) {
       await tx.recipeItem.deleteMany({
@@ -394,9 +399,9 @@ export async function updateRecipe(
       });
     }
 
-    // ----------------------------------------------
+    // ------------------------------------------
     // MISE À JOUR / CRÉATION
-    // ----------------------------------------------
+    // ------------------------------------------
 
     for (const item of input.items) {
       if (item.id) {
@@ -408,7 +413,7 @@ export async function updateRecipe(
           data: {
             ingredientId: item.ingredientId,
 
-            quantityPerLiter: new Prisma.Decimal(item.quantityPerLiter),
+            quantity: new Prisma.Decimal(item.quantity),
           },
         });
       } else {
@@ -418,15 +423,15 @@ export async function updateRecipe(
 
             ingredientId: item.ingredientId,
 
-            quantityPerLiter: new Prisma.Decimal(item.quantityPerLiter),
+            quantity: new Prisma.Decimal(item.quantity),
           },
         });
       }
     }
 
-    // ----------------------------------------------
+    // ------------------------------------------
     // MISE À JOUR RECETTE
-    // ----------------------------------------------
+    // ------------------------------------------
 
     return tx.recipe.update({
       where: {
@@ -439,6 +444,8 @@ export async function updateRecipe(
         description: input.description?.trim()
           ? input.description.trim()
           : null,
+
+        productionVolumeMl: input.productionVolumeMl,
       },
 
       select: recipeSelect,
