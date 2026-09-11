@@ -1,5 +1,4 @@
 import { Prisma } from "@/app/generated/prisma/client";
-
 import { prisma } from "@/lib/prisma";
 
 import type {
@@ -75,7 +74,6 @@ function mapRecipe(
   return {
     id: recipe.id,
     productId: recipe.productId,
-
     name: recipe.name,
     description: recipe.description,
 
@@ -111,6 +109,7 @@ async function getProductForRecipe(productId: string) {
       id: true,
       shopId: true,
       name: true,
+
       recipe: {
         select: {
           id: true,
@@ -138,7 +137,7 @@ async function validateRecipeItems(
   }>,
 ) {
   // --------------------------------------------------
-  // Nombre maximum
+  // NOMBRE MAXIMUM
   // --------------------------------------------------
 
   if (items.length > 50) {
@@ -146,7 +145,7 @@ async function validateRecipeItems(
   }
 
   // --------------------------------------------------
-  // Doublons d'ingrédients
+  // DOUBLONS
   // --------------------------------------------------
 
   const ingredientIds = items.map((item) => item.ingredientId);
@@ -158,7 +157,7 @@ async function validateRecipeItems(
   }
 
   // --------------------------------------------------
-  // Vérification des ingrédients
+  // VÉRIFICATION DES INGRÉDIENTS
   // --------------------------------------------------
 
   const ingredients = await prisma.rawIngredient.findMany({
@@ -197,15 +196,12 @@ async function validateRecipeItems(
 // VÉRIFICATION DU NOM
 // ======================================================
 //
-// Le nom de recette n'a plus besoin d'être
-// unique au niveau du Shop.
+// Le nom d'une recette doit être unique dans
+// la boutique principale.
 //
-// Chaque produit possède au maximum UNE recette.
-//
-// On conserve néanmoins cette fonction si tu veux
-// éviter deux recettes portant exactement le même
-// nom dans la boutique.
-//
+// Lors d'une modification, la recette actuelle
+// est exclue de la vérification.
+// ======================================================
 
 async function ensureRecipeNameAvailable(
   shopId: string,
@@ -326,9 +322,14 @@ export async function getRecipeByProductId(
 // CRÉER UNE RECETTE
 // ======================================================
 //
-// productId vient de la route / du contexte.
-// Il ne vient pas du body.
+// productId est volontairement séparé de input.
 //
+// input contient uniquement :
+// - name
+// - description
+// - productionVolumeMl
+// - items
+// ======================================================
 
 export async function createRecipe(
   productId: string,
@@ -357,7 +358,7 @@ export async function createRecipe(
   await ensureRecipeNameAvailable(shop.id, input.name);
 
   // --------------------------------------------------
-  // ITEMS
+  // INGREDIENTS
   // --------------------------------------------------
 
   await validateRecipeItems(shop.id, input.items);
@@ -408,7 +409,7 @@ export async function updateRecipe(
   const shop = await getMainShop();
 
   // --------------------------------------------------
-  // RECETTE
+  // RECETTE EXISTANTE
   // --------------------------------------------------
 
   const existingRecipe = await prisma.recipe.findFirst({
@@ -444,24 +445,27 @@ export async function updateRecipe(
   await ensureRecipeNameAvailable(shop.id, input.name, recipeId);
 
   // --------------------------------------------------
-  // ITEMS
+  // INGREDIENTS
   // --------------------------------------------------
 
   await validateRecipeItems(shop.id, input.items);
 
   // --------------------------------------------------
-  // IDS EXISTANTS
+  // IDS DES ITEMS EXISTANTS
   // --------------------------------------------------
 
   const existingItemIds = new Set(existingRecipe.items.map((item) => item.id));
+
+  // --------------------------------------------------
+  // IDS ENVOYÉS PAR LE CLIENT
+  // --------------------------------------------------
 
   const incomingItemIds = input.items
     .map((item) => item.id)
     .filter((id): id is string => Boolean(id));
 
   // --------------------------------------------------
-  // VÉRIFIER QUE LES IDS APPARTIENNENT
-  // À CETTE RECETTE
+  // VÉRIFIER LES IDS
   // --------------------------------------------------
 
   for (const itemId of incomingItemIds) {
@@ -471,7 +475,7 @@ export async function updateRecipe(
   }
 
   // --------------------------------------------------
-  // IDS À SUPPRIMER
+  // ITEMS À SUPPRIMER
   // --------------------------------------------------
 
   const incomingItemIdSet = new Set(incomingItemIds);
@@ -486,7 +490,7 @@ export async function updateRecipe(
 
   const recipe = await prisma.$transaction(async (tx) => {
     // ------------------------------------------
-    // SUPPRESSION DES ITEMS RETIRÉS
+    // SUPPRIMER LES ITEMS RETIRÉS
     // ------------------------------------------
 
     if (itemIdsToDelete.length > 0) {
@@ -502,7 +506,7 @@ export async function updateRecipe(
     }
 
     // ------------------------------------------
-    // MISE À JOUR / CRÉATION
+    // METTRE À JOUR / CRÉER LES ITEMS
     // ------------------------------------------
 
     for (const item of input.items) {
@@ -532,7 +536,7 @@ export async function updateRecipe(
     }
 
     // ------------------------------------------
-    // MISE À JOUR RECETTE
+    // METTRE À JOUR LA RECETTE
     // ------------------------------------------
 
     return tx.recipe.update({
@@ -561,14 +565,12 @@ export async function updateRecipe(
 // SUPPRIMER UNE RECETTE
 // ======================================================
 //
-// Une recette n'est plus "utilisée par plusieurs
-// produits". Elle appartient à un seul produit.
-//
-// Supprimer la recette ne supprime donc PAS le produit.
+// La suppression de la recette ne supprime PAS
+// le produit.
 //
 // Les RecipeItem sont supprimés automatiquement
 // grâce à onDelete: Cascade.
-//
+// ======================================================
 
 export async function deleteRecipe(recipeId: string): Promise<RecipeData> {
   const shop = await getMainShop();

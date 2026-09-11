@@ -3,8 +3,10 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
+
 import { createRecipe, getRecipes } from "@/lib/modules/recipe/recipe.service";
-import { createRecipeSchema } from "@/lib/modules/recipe/recipe.schema";
+
+import { createRecipeRequestSchema } from "@/lib/modules/recipe/recipe.schema";
 
 // ======================================================
 // CONFIGURATION
@@ -141,7 +143,7 @@ export async function POST(request: Request) {
     // VALIDATION
     // --------------------------------------------------
 
-    const result = createRecipeSchema.safeParse(body);
+    const result = createRecipeRequestSchema.safeParse(body);
 
     if (!result.success) {
       const message = result.error.issues
@@ -162,8 +164,16 @@ export async function POST(request: Request) {
     // --------------------------------------------------
     // CRÉATION
     // --------------------------------------------------
+    //
+    // productId appartient à la requête HTTP,
+    // mais ne fait pas partie de CreateRecipeInput.
+    //
+    // On le sépare donc avant d'appeler le service.
+    // --------------------------------------------------
 
-    const recipe = await createRecipe(result.data);
+    const { productId, ...input } = result.data;
+
+    const recipe = await createRecipe(productId, input);
 
     return NextResponse.json(
       {
@@ -220,6 +230,37 @@ export async function POST(request: Request) {
         },
         {
           status: 404,
+        },
+      );
+    }
+
+    // --------------------------------------------------
+    // PRODUIT
+    // --------------------------------------------------
+
+    if (error instanceof Error && error.message === "PRODUCT_NOT_FOUND") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Produit introuvable",
+        },
+        {
+          status: 404,
+        },
+      );
+    }
+
+    if (
+      error instanceof Error &&
+      error.message === "PRODUCT_ALREADY_HAS_RECIPE"
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Ce produit possède déjà une recette",
+        },
+        {
+          status: 409,
         },
       );
     }

@@ -23,6 +23,13 @@ export type RecipeItemInput = z.infer<typeof recipeItemSchema>;
 // ======================================================
 // CRÉATION D'UNE RECETTE
 // ======================================================
+//
+// Ce schéma représente uniquement les données propres
+// à la recette.
+//
+// productId n'est volontairement PAS présent ici.
+// Le service reçoit productId séparément.
+// ======================================================
 
 export const createRecipeSchema = z.object({
   name: z
@@ -54,7 +61,40 @@ export const createRecipeSchema = z.object({
 export type CreateRecipeInput = z.infer<typeof createRecipeSchema>;
 
 // ======================================================
+// REQUÊTE HTTP DE CRÉATION
+// ======================================================
+//
+// Le client envoie productId avec les données de recette.
+//
+// Exemple :
+//
+// {
+//   productId: "...",
+//   name: "Jus Ananas",
+//   description: "...",
+//   productionVolumeMl: 2000,
+//   items: []
+// }
+//
+// productId est ensuite séparé dans la route avant
+// d'appeler le service.
+// ======================================================
+
+export const createRecipeRequestSchema = createRecipeSchema.extend({
+  productId: z.string().trim().min(1, "Le produit est requis"),
+});
+
+export type CreateRecipeRequestInput = z.infer<
+  typeof createRecipeRequestSchema
+>;
+
+// ======================================================
 // MODIFICATION D'UNE RECETTE
+// ======================================================
+//
+// productId n'est pas nécessaire ici.
+// L'identifiant de la recette dans l'URL permet déjà
+// de retrouver le produit concerné.
 // ======================================================
 
 export const updateRecipeSchema = z.object({
