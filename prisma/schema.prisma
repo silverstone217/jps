@@ -146,8 +146,8 @@ model Shop {
   staffAssignments StaffAssignment[]
   rawIngredients   RawIngredient[]
   packagings       Packaging[]
-  recipes          Recipe[]
-  products         Product[]
+
+  products Product[]
 
   @@index([name])
 }
@@ -313,19 +313,18 @@ model RawMaterialPurchase {
 
 model Recipe {
   id                 String   @id @default(cuid())
-  shopId             String
+  productId          String   @unique
   name               String
   description        String?
   productionVolumeMl Int      @default(2000)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  shop     Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  items    RecipeItem[]
-  products Product[]
+  product Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  items   RecipeItem[]
+  shopId  String?
 
-  @@unique([shopId, name])
-  @@index([shopId])
+  @@index([productId])
 }
 
 // ======================================================
@@ -338,7 +337,8 @@ model RecipeItem {
   ingredientId String
   quantity     Decimal @db.Decimal(14, 3)
 
-  recipe     Recipe        @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
   ingredient RawIngredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
 
   @@unique([recipeId, ingredientId])
@@ -350,23 +350,18 @@ model RecipeItem {
 // ======================================================
 
 model Product {
-  id String @id @default(cuid())
-
-  shopId String
-
+  id          String   @id @default(cuid())
+  shopId      String
   name        String
   description String?
   image       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  recipeId String?
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
-  isActive Boolean @default(true)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  shop   Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  recipe Recipe? @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  recipe Recipe?
 
   variants ProductVariant[]
 
@@ -379,27 +374,21 @@ model Product {
 // ======================================================
 
 model ProductVariant {
-  id String @id @default(cuid())
+  id            String   @id @default(cuid())
+  productId     String
+  packagingId   String
+  sku           String   @unique
+  price         Decimal  @db.Decimal(14, 2)
+  shelfLifeDays Int      @default(2)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  productId   String
-  packagingId String
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
-  sku String @unique
-
-  price Decimal @db.Decimal(14, 2)
-
-  shelfLifeDays Int @default(2)
-
-  isActive Boolean @default(true)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
   packaging Packaging @relation(fields: [packagingId], references: [id], onDelete: Restrict)
 
-  stocks FinishedStock[]
-
+  stocks          FinishedStock[]
   saleItems       SaleItem[]
   productionItems ProductionItem[]
   transfers       StockTransferItem[]

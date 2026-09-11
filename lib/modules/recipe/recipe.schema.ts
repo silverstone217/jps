@@ -81,10 +81,14 @@ export const updateRecipeSchema = z.object({
   items: z
     .array(
       recipeItemSchema.extend({
-        id: z.string().trim().min(1).optional(),
+        id: z
+          .string()
+          .trim()
+          .min(1, "L'identifiant de l'élément est invalide")
+          .optional(),
       }),
     )
-    .min(1, "La recette doit contenir au moins un ingrédient")
+    .min(1, "Une recette doit contenir au moins un ingrédient")
     .max(50, "Une recette ne peut pas contenir plus de 50 ingrédients"),
 });
 
@@ -113,7 +117,7 @@ export interface RecipeItemData {
 
 export interface RecipeData {
   id: string;
-  shopId: string;
+  productId: string;
   name: string;
   description: string | null;
   productionVolumeMl: number;

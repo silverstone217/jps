@@ -22,8 +22,7 @@ export const productVariantSchema = z.object({
     .number({
       error: "Le prix est requis",
     })
-    .positive("Le prix doit être supérieur à 0")
-    .finite("Le prix doit être un nombre valide"),
+    .positive("Le prix doit être supérieur à 0"),
 
   shelfLifeDays: z
     .number({
@@ -40,6 +39,59 @@ export const productVariantSchema = z.object({
 export type ProductVariantInput = z.infer<typeof productVariantSchema>;
 
 // ======================================================
+// ITEM DE RECETTE
+// ======================================================
+
+export const productRecipeItemSchema = z.object({
+  ingredientId: z.string().trim().min(1, "La matière première est requise"),
+
+  quantity: z
+    .number({
+      error: "La quantité est requise",
+    })
+    .positive("La quantité doit être supérieure à 0")
+    .finite("La quantité doit être un nombre valide"),
+});
+
+export type ProductRecipeItemInput = z.infer<typeof productRecipeItemSchema>;
+
+// ======================================================
+// RECETTE DU PRODUIT
+// ======================================================
+
+export const productRecipeSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, "Le nom de la recette doit contenir au moins 2 caractères")
+    .max(80, "Le nom de la recette ne peut pas dépasser 80 caractères"),
+
+  description: z
+    .string()
+    .trim()
+    .max(
+      500,
+      "La description de la recette ne peut pas dépasser 500 caractères",
+    )
+    .optional()
+    .or(z.literal("")),
+
+  productionVolumeMl: z
+    .number({
+      error: "Le volume de production est requis",
+    })
+    .int("Le volume de production doit être un nombre entier")
+    .positive("Le volume de production doit être supérieur à 0"),
+
+  items: z
+    .array(productRecipeItemSchema)
+    .min(1, "La recette doit contenir au moins un ingrédient")
+    .max(50, "Une recette ne peut pas contenir plus de 50 ingrédients"),
+});
+
+export type ProductRecipeInput = z.infer<typeof productRecipeSchema>;
+
+// ======================================================
 // CRÉATION D'UN PRODUIT
 // ======================================================
 
@@ -53,16 +105,11 @@ export const createProductSchema = z.object({
   description: z
     .string()
     .trim()
-    .max(500, "La description ne peut pas dépasser 500 caractères")
+    .max(500, "Le nom du produit ne peut pas dépasser 500 caractères")
     .optional()
     .or(z.literal("")),
 
-  recipeId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant de la recette est invalide")
-    .optional()
-    .or(z.literal("")),
+  recipe: productRecipeSchema.optional(),
 
   isActive: z.boolean().optional().default(true),
 
@@ -88,23 +135,22 @@ export const updateProductSchema = z.object({
   description: z
     .string()
     .trim()
-    .max(500, "La description ne peut pas dépasser 500 caractères")
+    .max(500, "La description du produit ne peut pas dépasser 500 caractères")
     .optional()
     .or(z.literal("")),
 
-  recipeId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant de la recette est invalide")
-    .optional()
-    .or(z.literal("")),
+  recipe: productRecipeSchema.optional(),
 
   isActive: z.boolean().optional(),
 
   variants: z
     .array(
       productVariantSchema.extend({
-        id: z.string().trim().min(1).optional(),
+        id: z
+          .string()
+          .trim()
+          .min(1, "L'identifiant de la variante est invalide")
+          .optional(),
       }),
     )
     .min(1, "Le produit doit avoir au moins une variante")
@@ -127,9 +173,11 @@ export type ProductIdInput = z.infer<typeof productIdSchema>;
 // IMAGE
 // ======================================================
 
-// Utilisé lorsqu'une URL Cloudinary doit être validée.
-// Le fichier image lui-même sera validé dans la route
-// /products/[id]/image.
+// Utilisé lorsqu'une URL Cloudinary
+// doit être validée.
+//
+// Le fichier image lui-même sera validé
+// dans la route /products/[id]/image.
 
 export const productImageSchema = z.object({
   image: z.url("L'image doit être une URL valide"),
@@ -138,7 +186,29 @@ export const productImageSchema = z.object({
 export type ProductImageInput = z.infer<typeof productImageSchema>;
 
 // ======================================================
-// RÉPONSE / TYPES MÉTIER
+// TYPES MÉTIER — RECETTE
+// ======================================================
+
+export interface ProductRecipeItemData {
+  id: string;
+  recipeId: string;
+  ingredientId: string;
+  quantity: number;
+}
+
+export interface ProductRecipeData {
+  id: string;
+  productId: string;
+  name: string;
+  description: string | null;
+  productionVolumeMl: number;
+  createdAt: string;
+  updatedAt: string;
+  items: ProductRecipeItemData[];
+}
+
+// ======================================================
+// TYPES MÉTIER — VARIANTE
 // ======================================================
 
 export interface ProductVariantData {
@@ -153,15 +223,22 @@ export interface ProductVariantData {
   updatedAt: string;
 }
 
+// ======================================================
+// TYPES MÉTIER — PRODUIT
+// ======================================================
+
 export interface ProductData {
   id: string;
   shopId: string;
   name: string;
   description: string | null;
   image: string | null;
-  recipeId: string | null;
+
+  recipe: ProductRecipeData | null;
+
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+
   variants: ProductVariantData[];
 }

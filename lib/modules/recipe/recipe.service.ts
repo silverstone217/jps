@@ -20,7 +20,7 @@ const MAIN_SHOP_SINGLETON = "MAIN";
 
 const recipeSelect = {
   id: true,
-  shopId: true,
+  productId: true,
   name: true,
   description: true,
   productionVolumeMl: true,
@@ -74,12 +74,15 @@ function mapRecipe(
 ): RecipeData {
   return {
     id: recipe.id,
-    shopId: recipe.shopId,
+    productId: recipe.productId,
+
     name: recipe.name,
     description: recipe.description,
+
     productionVolumeMl: recipe.productionVolumeMl,
 
     createdAt: recipe.createdAt.toISOString(),
+
     updatedAt: recipe.updatedAt.toISOString(),
 
     items: recipe.items.map((item) => ({
@@ -89,6 +92,38 @@ function mapRecipe(
       quantity: Number(item.quantity),
     })),
   };
+}
+
+// ======================================================
+// PRODUIT
+// ======================================================
+
+async function getProductForRecipe(productId: string) {
+  const shop = await getMainShop();
+
+  const product = await prisma.product.findFirst({
+    where: {
+      id: productId,
+      shopId: shop.id,
+    },
+
+    select: {
+      id: true,
+      shopId: true,
+      name: true,
+      recipe: {
+        select: {
+          id: true,
+        },
+      },
+    },
+  });
+
+  if (!product) {
+    throw new Error("PRODUCT_NOT_FOUND");
+  }
+
+  return product;
 }
 
 // ======================================================
@@ -159,8 +194,18 @@ async function validateRecipeItems(
 }
 
 // ======================================================
-// VÉRIFICATION NOM
+// VÉRIFICATION DU NOM
 // ======================================================
+//
+// Le nom de recette n'a plus besoin d'être
+// unique au niveau du Shop.
+//
+// Chaque produit possède au maximum UNE recette.
+//
+// On conserve néanmoins cette fonction si tu veux
+// éviter deux recettes portant exactement le même
+// nom dans la boutique.
+//
 
 async function ensureRecipeNameAvailable(
   shopId: string,
@@ -169,7 +214,9 @@ async function ensureRecipeNameAvailable(
 ) {
   const recipes = await prisma.recipe.findMany({
     where: {
-      shopId,
+      product: {
+        shopId,
+      },
 
       ...(excludedRecipeId
         ? {
@@ -206,7 +253,9 @@ export async function getRecipes(): Promise<RecipeData[]> {
 
   const recipes = await prisma.recipe.findMany({
     where: {
-      shopId: shop.id,
+      product: {
+        shopId: shop.id,
+      },
     },
 
     orderBy: {
@@ -229,7 +278,10 @@ export async function getRecipeById(recipeId: string): Promise<RecipeData> {
   const recipe = await prisma.recipe.findFirst({
     where: {
       id: recipeId,
-      shopId: shop.id,
+
+      product: {
+        shopId: shop.id,
+      },
     },
 
     select: recipeSelect,
@@ -243,13 +295,60 @@ export async function getRecipeById(recipeId: string): Promise<RecipeData> {
 }
 
 // ======================================================
-// CRÉER UNE RECETTE
+// RÉCUPÉRER LA RECETTE D'UN PRODUIT
 // ======================================================
 
+export async function getRecipeByProductId(
+  productId: string,
+): Promise<RecipeData | null> {
+  const shop = await getMainShop();
+
+  const recipe = await prisma.recipe.findFirst({
+    where: {
+      productId,
+
+      product: {
+        shopId: shop.id,
+      },
+    },
+
+    select: recipeSelect,
+  });
+
+  if (!recipe) {
+    return null;
+  }
+
+  return mapRecipe(recipe);
+}
+
+// ======================================================
+// CRÉER UNE RECETTE
+// ======================================================
+//
+// productId vient de la route / du contexte.
+// Il ne vient pas du body.
+//
+
 export async function createRecipe(
+  productId: string,
   input: CreateRecipeInput,
 ): Promise<RecipeData> {
   const shop = await getMainShop();
+
+  // --------------------------------------------------
+  // PRODUIT
+  // --------------------------------------------------
+
+  const product = await getProductForRecipe(productId);
+
+  // --------------------------------------------------
+  // UNE SEULE RECETTE PAR PRODUIT
+  // --------------------------------------------------
+
+  if (product.recipe) {
+    throw new Error("PRODUCT_ALREADY_HAS_RECIPE");
+  }
 
   // --------------------------------------------------
   // NOM
@@ -270,7 +369,7 @@ export async function createRecipe(
   const recipe = await prisma.$transaction(async (tx) => {
     const createdRecipe = await tx.recipe.create({
       data: {
-        shopId: shop.id,
+        productId: product.id,
 
         name: input.name.trim(),
 
@@ -315,12 +414,15 @@ export async function updateRecipe(
   const existingRecipe = await prisma.recipe.findFirst({
     where: {
       id: recipeId,
-      shopId: shop.id,
+
+      product: {
+        shopId: shop.id,
+      },
     },
 
     select: {
       id: true,
-      shopId: true,
+      productId: true,
 
       items: {
         select: {
@@ -456,22 +558,17 @@ export async function updateRecipe(
 }
 
 // ======================================================
-// VÉRIFIER SI UNE RECETTE EST UTILISÉE
-// ======================================================
-
-async function recipeHasProducts(recipeId: string): Promise<boolean> {
-  const count = await prisma.product.count({
-    where: {
-      recipeId,
-    },
-  });
-
-  return count > 0;
-}
-
-// ======================================================
 // SUPPRIMER UNE RECETTE
 // ======================================================
+//
+// Une recette n'est plus "utilisée par plusieurs
+// produits". Elle appartient à un seul produit.
+//
+// Supprimer la recette ne supprime donc PAS le produit.
+//
+// Les RecipeItem sont supprimés automatiquement
+// grâce à onDelete: Cascade.
+//
 
 export async function deleteRecipe(recipeId: string): Promise<RecipeData> {
   const shop = await getMainShop();
@@ -483,7 +580,10 @@ export async function deleteRecipe(recipeId: string): Promise<RecipeData> {
   const recipe = await prisma.recipe.findFirst({
     where: {
       id: recipeId,
-      shopId: shop.id,
+
+      product: {
+        shopId: shop.id,
+      },
     },
 
     select: recipeSelect,
@@ -491,16 +591,6 @@ export async function deleteRecipe(recipeId: string): Promise<RecipeData> {
 
   if (!recipe) {
     throw new Error("RECIPE_NOT_FOUND");
-  }
-
-  // --------------------------------------------------
-  // PRODUITS ASSOCIÉS
-  // --------------------------------------------------
-
-  const hasProducts = await recipeHasProducts(recipeId);
-
-  if (hasProducts) {
-    throw new Error("RECIPE_IN_USE");
   }
 
   // --------------------------------------------------

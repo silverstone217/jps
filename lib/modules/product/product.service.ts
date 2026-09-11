@@ -1,4 +1,5 @@
 import { Prisma } from "@/app/generated/prisma/client";
+
 import { cloudinary } from "@/lib/cloudinary";
 import { prisma } from "@/lib/prisma";
 
@@ -19,15 +20,39 @@ const productSelect = {
   name: true,
   description: true,
   image: true,
-  recipeId: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,
+
+  recipe: {
+    select: {
+      id: true,
+      productId: true,
+      name: true,
+      description: true,
+      productionVolumeMl: true,
+      createdAt: true,
+      updatedAt: true,
+
+      items: {
+        orderBy: {
+          id: "asc",
+        },
+        select: {
+          id: true,
+          recipeId: true,
+          ingredientId: true,
+          quantity: true,
+        },
+      },
+    },
+  },
 
   variants: {
     orderBy: {
       createdAt: "asc",
     },
+
     select: {
       id: true,
       productId: true,
@@ -61,7 +86,7 @@ function mapProductVariant(variant: {
     id: variant.id,
     productId: variant.productId,
     packagingId: variant.packagingId,
-    sku: Number(variant.price) >= 0 ? variant.sku : variant.sku,
+    sku: variant.sku,
     price: Number(variant.price),
     shelfLifeDays: variant.shelfLifeDays,
     isActive: variant.isActive,
@@ -81,8 +106,27 @@ function mapProduct(
     name: product.name,
     description: product.description,
     image: product.image,
-    recipeId: product.recipeId,
     isActive: product.isActive,
+
+    recipe: product.recipe
+      ? {
+          id: product.recipe.id,
+          productId: product.recipe.productId,
+          name: product.recipe.name,
+          description: product.recipe.description,
+          productionVolumeMl: product.recipe.productionVolumeMl,
+          createdAt: product.recipe.createdAt.toISOString(),
+          updatedAt: product.recipe.updatedAt.toISOString(),
+
+          items: product.recipe.items.map((item) => ({
+            id: item.id,
+            recipeId: item.recipeId,
+            ingredientId: item.ingredientId,
+            quantity: Number(item.quantity),
+          })),
+        }
+      : null,
+
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),
 
@@ -101,6 +145,7 @@ async function getMainShop() {
     where: {
       singleton: MAIN_SHOP_SINGLETON,
     },
+
     select: {
       id: true,
     },
@@ -153,8 +198,10 @@ async function validateVariantInputs(
       id: {
         in: packagingIds,
       },
+
       shopId,
     },
+
     select: {
       id: true,
       name: true,
@@ -185,12 +232,11 @@ async function validateVariantInputs(
       throw new Error("PACKAGING_INACTIVE");
     }
 
-    /*
-     * Un produit ne peut avoir qu'une variante
-     * par format.
-     *
-     * Le format réel vient du Packaging.size.
-     */
+    // Un produit ne peut avoir qu'une variante
+    // par format.
+    //
+    // Le format réel vient du Packaging.size.
+
     if (selectedSizes.has(packaging.size)) {
       throw new Error("DUPLICATE_PRODUCT_VARIANT_SIZE");
     }
@@ -216,6 +262,7 @@ async function ensureSkusAvailable(
       sku: {
         in: normalizedSkus,
       },
+
       ...(excludeVariantIds.length > 0
         ? {
             id: {
@@ -224,6 +271,7 @@ async function ensureSkusAvailable(
           }
         : {}),
     },
+
     select: {
       id: true,
       sku: true,
@@ -233,33 +281,6 @@ async function ensureSkusAvailable(
   if (existing.length > 0) {
     throw new Error("SKU_ALREADY_EXISTS");
   }
-}
-
-// ======================================================
-// VÉRIFIER UNE RECETTE
-// ======================================================
-
-async function validateRecipe(shopId: string, recipeId?: string) {
-  if (!recipeId) {
-    return null;
-  }
-
-  const recipe = await prisma.recipe.findFirst({
-    where: {
-      id: recipeId,
-      shopId,
-    },
-    select: {
-      id: true,
-      name: true,
-    },
-  });
-
-  if (!recipe) {
-    throw new Error("RECIPE_NOT_FOUND");
-  }
-
-  return recipe;
 }
 
 // ======================================================
@@ -273,9 +294,11 @@ export async function getProducts(): Promise<ProductData[]> {
     where: {
       shopId: shop.id,
     },
+
     orderBy: {
       createdAt: "desc",
     },
+
     select: productSelect,
   });
 
@@ -294,9 +317,11 @@ export async function getActiveProducts(): Promise<ProductData[]> {
       shopId: shop.id,
       isActive: true,
     },
+
     orderBy: {
       name: "asc",
     },
+
     select: productSelect,
   });
 
@@ -315,6 +340,7 @@ export async function getProductById(productId: string): Promise<ProductData> {
       id: productId,
       shopId: shop.id,
     },
+
     select: productSelect,
   });
 
@@ -326,7 +352,7 @@ export async function getProductById(productId: string): Promise<ProductData> {
 }
 
 // ======================================================
-// CRÉER UN PRODUIT + SES VARIANTES
+// CRÉER UN PRODUIT + SES VARIANTES + SA RECETTE
 // ======================================================
 
 export async function createProduct(
@@ -334,14 +360,20 @@ export async function createProduct(
 ): Promise<ProductData> {
   const shop = await getMainShop();
 
+  // ----------------------------------------------------
+  // Vérifier le nom du produit
+  // ----------------------------------------------------
+
   const existingProduct = await prisma.product.findFirst({
     where: {
       shopId: shop.id,
+
       name: {
         equals: input.name,
         mode: "insensitive",
       },
     },
+
     select: {
       id: true,
     },
@@ -351,41 +383,97 @@ export async function createProduct(
     throw new Error("PRODUCT_NAME_ALREADY_EXISTS");
   }
 
-  await validateRecipe(shop.id, input.recipeId || undefined);
+  // ----------------------------------------------------
+  // Vérifier les variantes
+  // ----------------------------------------------------
 
   await validateVariantInputs(shop.id, input.variants);
 
   await ensureSkusAvailable(input.variants.map((variant) => variant.sku));
 
+  // ----------------------------------------------------
+  // Création
+  // ----------------------------------------------------
+
   const product = await prisma.$transaction(async (tx) => {
+    // ----------------------------------------------
+    // Produit
+    // ----------------------------------------------
+
     const createdProduct = await tx.product.create({
       data: {
         shopId: shop.id,
+
         name: input.name,
+
         description: input.description || null,
-        recipeId: input.recipeId || null,
+
         isActive: input.isActive ?? true,
       },
+
       select: {
         id: true,
       },
     });
 
+    // ----------------------------------------------
+    // Recette
+    //
+    // IMPORTANT :
+    // Recipe appartient maintenant au Product.
+    // ----------------------------------------------
+
+    if (input.recipe) {
+      await tx.recipe.create({
+        data: {
+          productId: createdProduct.id,
+
+          name: input.recipe.name,
+
+          description: input.recipe.description || null,
+
+          productionVolumeMl: input.recipe.productionVolumeMl,
+
+          items: {
+            create: input.recipe.items.map((item) => ({
+              ingredientId: item.ingredientId,
+
+              quantity: new Prisma.Decimal(item.quantity),
+            })),
+          },
+        },
+      });
+    }
+
+    // ----------------------------------------------
+    // Variantes
+    // ----------------------------------------------
+
     await tx.productVariant.createMany({
       data: input.variants.map((variant) => ({
         productId: createdProduct.id,
+
         packagingId: variant.packagingId,
+
         sku: variant.sku.toUpperCase(),
+
         price: new Prisma.Decimal(variant.price),
+
         shelfLifeDays: variant.shelfLifeDays ?? 2,
+
         isActive: variant.isActive ?? true,
       })),
     });
+
+    // ----------------------------------------------
+    // Récupérer le produit complet
+    // ----------------------------------------------
 
     return tx.product.findUniqueOrThrow({
       where: {
         id: createdProduct.id,
       },
+
       select: productSelect,
     });
   });
@@ -441,7 +529,7 @@ async function variantHasHistory(variantId: string): Promise<boolean> {
 }
 
 // ======================================================
-// MODIFIER UN PRODUIT + SES VARIANTES
+// MODIFIER UN PRODUIT + SES VARIANTES + SA RECETTE
 // ======================================================
 
 export async function updateProduct(
@@ -450,15 +538,27 @@ export async function updateProduct(
 ): Promise<ProductData> {
   const shop = await getMainShop();
 
+  // ----------------------------------------------------
+  // Produit existant
+  // ----------------------------------------------------
+
   const existingProduct = await prisma.product.findFirst({
     where: {
       id: productId,
       shopId: shop.id,
     },
+
     select: {
       id: true,
       name: true,
       image: true,
+
+      recipe: {
+        select: {
+          id: true,
+        },
+      },
+
       variants: {
         select: {
           id: true,
@@ -476,17 +576,24 @@ export async function updateProduct(
     throw new Error("PRODUCT_NOT_FOUND");
   }
 
+  // ----------------------------------------------------
+  // Vérifier le nom
+  // ----------------------------------------------------
+
   const duplicateName = await prisma.product.findFirst({
     where: {
       shopId: shop.id,
+
       id: {
         not: productId,
       },
+
       name: {
         equals: input.name,
         mode: "insensitive",
       },
     },
+
     select: {
       id: true,
     },
@@ -496,23 +603,25 @@ export async function updateProduct(
     throw new Error("PRODUCT_NAME_ALREADY_EXISTS");
   }
 
-  await validateRecipe(shop.id, input.recipeId || undefined);
+  // ----------------------------------------------------
+  // Vérifier les variantes
+  // ----------------------------------------------------
 
   await validateVariantInputs(shop.id, input.variants);
 
-  /*
-   * Seuls les IDs présents dans la requête
-   * sont considérés comme les variantes que
-   * le produit doit conserver.
-   */
+  // ----------------------------------------------------
+  // IDs des variantes reçues
+  // ----------------------------------------------------
+
   const incomingVariantIds = input.variants
     .map((variant) => variant.id)
     .filter((id): id is string => Boolean(id));
 
-  /*
-   * Vérifier que les IDs envoyés appartiennent
-   * réellement à ce produit.
-   */
+  // ----------------------------------------------------
+  // Vérifier que les variantes appartiennent
+  // réellement au produit
+  // ----------------------------------------------------
+
   for (const variantId of incomingVariantIds) {
     const belongsToProduct = existingProduct.variants.some(
       (variant) => variant.id === variantId,
@@ -523,19 +632,19 @@ export async function updateProduct(
     }
   }
 
-  /*
-   * Les variantes conservées ne doivent pas
-   * avoir le même SKU qu'une autre variante
-   * existante.
-   */
+  // ----------------------------------------------------
+  // Vérifier les SKU
+  // ----------------------------------------------------
+
   await ensureSkusAvailable(
     input.variants.map((variant) => variant.sku),
     incomingVariantIds,
   );
 
-  /*
-   * Vérifier les variantes retirées.
-   */
+  // ----------------------------------------------------
+  // Vérifier les variantes retirées
+  // ----------------------------------------------------
+
   const incomingIdsSet = new Set(incomingVariantIds);
 
   const removedVariants = existingProduct.variants.filter(
@@ -543,6 +652,7 @@ export async function updateProduct(
   );
 
   const variantsToDeactivate: string[] = [];
+
   const variantsToDelete: string[] = [];
 
   for (const variant of removedVariants) {
@@ -555,18 +665,25 @@ export async function updateProduct(
     }
   }
 
+  // ----------------------------------------------------
+  // TRANSACTION
+  // ----------------------------------------------------
+
   const product = await prisma.$transaction(async (tx) => {
-    /*
-     * Mise à jour du produit.
-     */
+    // ----------------------------------------------
+    // Mise à jour du produit
+    // ----------------------------------------------
+
     await tx.product.update({
       where: {
         id: productId,
       },
+
       data: {
         name: input.name,
+
         description: input.description || null,
-        recipeId: input.recipeId || null,
+
         ...(input.isActive !== undefined
           ? {
               isActive: input.isActive,
@@ -575,20 +692,107 @@ export async function updateProduct(
       },
     });
 
-    /*
-     * Mise à jour ou création des variantes.
-     */
+    // ----------------------------------------------
+    // Gestion de la recette
+    // ----------------------------------------------
+
+    if (input.recipe) {
+      // --------------------------------------------
+      // Si le produit possède déjà une recette
+      // --------------------------------------------
+
+      if (existingProduct.recipe) {
+        // Supprimer les anciens items.
+        //
+        // Les RecipeItem appartiennent à la
+        // recette et peuvent donc être recréés
+        // proprement.
+
+        await tx.recipeItem.deleteMany({
+          where: {
+            recipeId: existingProduct.recipe.id,
+          },
+        });
+
+        // Mettre à jour la recette.
+
+        await tx.recipe.update({
+          where: {
+            id: existingProduct.recipe.id,
+          },
+
+          data: {
+            name: input.recipe.name,
+
+            description: input.recipe.description || null,
+
+            productionVolumeMl: input.recipe.productionVolumeMl,
+
+            items: {
+              create: input.recipe.items.map((item) => ({
+                ingredientId: item.ingredientId,
+
+                quantity: new Prisma.Decimal(item.quantity),
+              })),
+            },
+          },
+        });
+      } else {
+        // ------------------------------------------
+        // Le produit n'avait pas encore de recette
+        // ------------------------------------------
+
+        await tx.recipe.create({
+          data: {
+            productId,
+
+            name: input.recipe.name,
+
+            description: input.recipe.description || null,
+
+            productionVolumeMl: input.recipe.productionVolumeMl,
+
+            items: {
+              create: input.recipe.items.map((item) => ({
+                ingredientId: item.ingredientId,
+
+                quantity: new Prisma.Decimal(item.quantity),
+              })),
+            },
+          },
+        });
+      }
+    } else {
+      // --------------------------------------------
+      // Aucune recette envoyée
+      //
+      // Si une recette existe déjà, on la conserve.
+      //
+      // Cela évite qu'une modification du produit
+      // supprime accidentellement sa recette.
+      // --------------------------------------------
+    }
+
+    // ----------------------------------------------
+    // Mise à jour / création des variantes
+    // ----------------------------------------------
+
     for (const variant of input.variants) {
       if (variant.id) {
         await tx.productVariant.update({
           where: {
             id: variant.id,
           },
+
           data: {
             packagingId: variant.packagingId,
+
             sku: variant.sku.toUpperCase(),
+
             price: new Prisma.Decimal(variant.price),
+
             shelfLifeDays: variant.shelfLifeDays ?? 2,
+
             isActive: variant.isActive ?? true,
           },
         });
@@ -596,20 +800,25 @@ export async function updateProduct(
         await tx.productVariant.create({
           data: {
             productId,
+
             packagingId: variant.packagingId,
+
             sku: variant.sku.toUpperCase(),
+
             price: new Prisma.Decimal(variant.price),
+
             shelfLifeDays: variant.shelfLifeDays ?? 2,
+
             isActive: variant.isActive ?? true,
           },
         });
       }
     }
 
-    /*
-     * Variante retirée mais ayant de l'historique :
-     * on la conserve et on la désactive.
-     */
+    // ----------------------------------------------
+    // Variantes avec historique
+    // ----------------------------------------------
+
     if (variantsToDeactivate.length > 0) {
       await tx.productVariant.updateMany({
         where: {
@@ -617,16 +826,17 @@ export async function updateProduct(
             in: variantsToDeactivate,
           },
         },
+
         data: {
           isActive: false,
         },
       });
     }
 
-    /*
-     * Variante retirée et sans historique :
-     * suppression physique possible.
-     */
+    // ----------------------------------------------
+    // Variantes sans historique
+    // ----------------------------------------------
+
     if (variantsToDelete.length > 0) {
       await tx.productVariant.deleteMany({
         where: {
@@ -637,10 +847,15 @@ export async function updateProduct(
       });
     }
 
+    // ----------------------------------------------
+    // Produit complet
+    // ----------------------------------------------
+
     return tx.product.findUniqueOrThrow({
       where: {
         id: productId,
       },
+
       select: productSelect,
     });
   });
@@ -660,6 +875,7 @@ export async function deleteProduct(productId: string): Promise<{
     where: {
       id: productId,
     },
+
     select: productSelect,
   });
 
@@ -689,9 +905,11 @@ export async function deleteProduct(productId: string): Promise<{
       where: {
         id: productId,
       },
+
       data: {
         isActive: false,
       },
+
       select: productSelect,
     });
 
@@ -706,16 +924,36 @@ export async function deleteProduct(productId: string): Promise<{
   // ======================================================
 
   const deletedProduct = await prisma.$transaction(async (tx) => {
+    // Les variantes ont des relations historiques
+    // en Restrict. On les supprime donc d'abord.
+
     await tx.productVariant.deleteMany({
       where: {
         productId,
       },
     });
 
+    // Ici :
+    //
+    // Product est supprimé
+    //       ↓
+    // Recipe est supprimée automatiquement
+    //       ↓
+    // RecipeItem est supprimé automatiquement
+    //
+    // grâce aux relations :
+    //
+    // Recipe.productId -> Product.id
+    // onDelete: Cascade
+    //
+    // RecipeItem.recipeId -> Recipe.id
+    // onDelete: Cascade
+
     return tx.product.delete({
       where: {
         id: productId,
       },
+
       select: productSelect,
     });
   });
@@ -744,6 +982,7 @@ export async function deleteProduct(productId: string): Promise<{
     deactivated: false,
   };
 }
+
 // ======================================================
 // CLOUDINARY — UPLOAD
 // ======================================================
@@ -759,6 +998,7 @@ function uploadToCloudinary(
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder: `jardin-pro/products/${productId}`,
+
         resource_type: "image",
 
         transformation: [
@@ -768,20 +1008,24 @@ function uploadToCloudinary(
             crop: "fill",
             gravity: "auto",
           },
+
           {
             quality: "auto",
             fetch_format: "auto",
           },
         ],
       },
+
       (error, result) => {
         if (error || !result) {
           reject(new Error("CLOUDINARY_UPLOAD_FAILED"));
+
           return;
         }
 
         resolve({
           secure_url: result.secure_url,
+
           public_id: result.public_id,
         });
       },
@@ -809,13 +1053,9 @@ function getCloudinaryPublicId(imageUrl: string): string | null {
 
     let publicIdSegments = segments.slice(uploadIndex + 1);
 
-    /*
-     * Supprimer les transformations Cloudinary
-     * situées avant le public_id.
-     *
-     * Exemple :
-     * /upload/c_fill,w_800,h_800/v123/...
-     */
+    // Supprimer les transformations
+    // Cloudinary situées avant le public_id.
+
     const versionIndex = publicIdSegments.findIndex((segment) =>
       /^v\d+$/.test(segment),
     );
@@ -823,10 +1063,6 @@ function getCloudinaryPublicId(imageUrl: string): string | null {
     if (versionIndex >= 0) {
       publicIdSegments = publicIdSegments.slice(versionIndex + 1);
     } else {
-      /*
-       * Si aucune version n'est présente,
-       * retirer les éventuelles transformations.
-       */
       while (publicIdSegments.length > 0 && publicIdSegments[0].includes(",")) {
         publicIdSegments = publicIdSegments.slice(1);
       }
@@ -860,6 +1096,7 @@ function deleteCloudinaryImage(publicId: string): Promise<void> {
       {
         resource_type: "image",
       },
+
       (error, result) => {
         if (error) {
           reject(error);
@@ -892,6 +1129,7 @@ export async function updateProductImage(
       id: productId,
       shopId: shop.id,
     },
+
     select: {
       id: true,
       image: true,
@@ -902,29 +1140,27 @@ export async function updateProductImage(
     throw new Error("PRODUCT_NOT_FOUND");
   }
 
-  /*
-   * On upload d'abord la nouvelle image.
-   */
+  // Upload d'abord la nouvelle image.
+
   const uploaded = await uploadToCloudinary(buffer, product.id);
 
   try {
-    /*
-     * Puis on enregistre sa nouvelle URL.
-     */
+    // Enregistrer la nouvelle URL en DB.
+
     const updated = await prisma.product.update({
       where: {
         id: product.id,
       },
+
       data: {
         image: uploaded.secure_url,
       },
+
       select: productSelect,
     });
 
-    /*
-     * Seulement après succès DB,
-     * on supprime l'ancienne image.
-     */
+    // DB OK → supprimer l'ancienne image.
+
     if (product.image) {
       const oldPublicId = getCloudinaryPublicId(product.image);
 
@@ -942,10 +1178,9 @@ export async function updateProductImage(
 
     return mapProduct(updated);
   } catch (error) {
-    /*
-     * Si la DB échoue, on supprime la nouvelle
-     * image pour éviter une image orpheline.
-     */
+    // DB échouée → supprimer la nouvelle
+    // image pour éviter une image orpheline.
+
     try {
       await deleteCloudinaryImage(uploaded.public_id);
     } catch (cleanupError) {
@@ -970,6 +1205,7 @@ export async function removeProductImage(
       id: productId,
       shopId: shop.id,
     },
+
     select: {
       id: true,
       image: true,
@@ -985,42 +1221,35 @@ export async function removeProductImage(
       where: {
         id: product.id,
       },
+
       select: productSelect,
     });
 
     return mapProduct(current);
   }
 
-  /*
-   * On retire d'abord la référence en DB.
-   * Le produit ne dépend donc plus d'une image
-   * qui pourrait ne plus exister.
-   */
+  // Retirer d'abord la référence DB.
+
   const updated = await prisma.product.update({
     where: {
       id: product.id,
     },
+
     data: {
       image: null,
     },
+
     select: productSelect,
   });
 
-  /*
-   * Ensuite on nettoie Cloudinary.
-   */
+  // Puis nettoyer Cloudinary.
+
   const publicId = getCloudinaryPublicId(product.image);
 
   if (publicId) {
     try {
       await deleteCloudinaryImage(publicId);
     } catch (error) {
-      /*
-       * La DB est déjà correcte.
-       * On journalise simplement le problème
-       * Cloudinary pour éviter de faire échouer
-       * la suppression logique de l'image.
-       */
       console.error("Erreur suppression image Cloudinary :", error);
     }
   }
