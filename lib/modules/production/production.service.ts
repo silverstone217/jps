@@ -31,9 +31,7 @@ function decimalToNumber(value: Prisma.Decimal | number): number {
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
-
   result.setDate(result.getDate() + days);
-
   return result;
 }
 
@@ -56,61 +54,6 @@ async function getMainShop() {
   }
 
   return shop;
-}
-
-// ======================================================
-// POS PRINCIPAL
-// ======================================================
-
-async function getMainPointOfSale(shopId: string) {
-  const pointOfSale = await prisma.pointOfSale.findFirst({
-    where: {
-      shopId,
-      isMainStore: true,
-      isActive: true,
-    },
-    orderBy: {
-      name: "asc",
-    },
-  });
-
-  if (!pointOfSale) {
-    throw new ProductionServiceError(
-      "POINT_OF_SALE_NOT_FOUND",
-      "La boutique principale ne possède aucun point de vente principal actif.",
-    );
-  }
-
-  return pointOfSale;
-}
-
-// ======================================================
-// POS
-// ======================================================
-
-async function getPointOfSale(pointOfSaleId: string, shopId: string) {
-  const pointOfSale = await prisma.pointOfSale.findFirst({
-    where: {
-      id: pointOfSaleId,
-      shopId,
-    },
-  });
-
-  if (!pointOfSale) {
-    throw new ProductionServiceError(
-      "POINT_OF_SALE_NOT_FOUND",
-      "Le point de vente est introuvable.",
-    );
-  }
-
-  if (!pointOfSale.isActive) {
-    throw new ProductionServiceError(
-      "POINT_OF_SALE_INACTIVE",
-      "Le point de vente est désactivé.",
-    );
-  }
-
-  return pointOfSale;
 }
 
 // ======================================================
@@ -228,12 +171,10 @@ async function validateProductionItems(
       id: {
         in: variantIds,
       },
-
       product: {
         shopId,
       },
     },
-
     include: {
       product: {
         include: {
@@ -244,7 +185,6 @@ async function validateProductionItems(
           },
         },
       },
-
       packaging: true,
     },
   });
@@ -369,7 +309,6 @@ export async function createProduction(
     where: {
       id: managerId,
     },
-
     select: {
       id: true,
       role: true,
@@ -413,20 +352,6 @@ export async function createProduction(
   }
 
   // ====================================================
-  // POS PRINCIPAL
-  // ====================================================
-  //
-  // IMPORTANT :
-  // Le client ne choisit PAS le POS.
-  //
-  // Toute production est réalisée
-  // dans la boutique principale.
-  //
-  // ====================================================
-
-  const mainPointOfSale = await getMainPointOfSale(shop.id);
-
-  // ====================================================
   // MATIÈRES PREMIÈRES
   // ====================================================
 
@@ -468,14 +393,8 @@ export async function createProduction(
     const createdProduction = await tx.production.create({
       data: {
         managerId,
-
-        // POS DÉTERMINÉ PAR LE SERVEUR
-        pointOfSaleId: mainPointOfSale.id,
-
         totalVolumeMl: input.totalVolumeMl,
-
         notes: input.notes?.trim() || null,
-
         producedAt,
       },
     });
@@ -497,16 +416,12 @@ export async function createProduction(
       const updated = await tx.rawIngredient.updateMany({
         where: {
           id: item.ingredientId,
-
           shopId: shop.id,
-
           isActive: true,
-
           stockQty: {
             gte: item.quantityUsed,
           },
         },
-
         data: {
           stockQty: {
             decrement: item.quantityUsed,
@@ -524,9 +439,7 @@ export async function createProduction(
       await tx.productionIngredient.create({
         data: {
           productionId: createdProduction.id,
-
           ingredientId: item.ingredientId,
-
           quantityUsed: item.quantityUsed,
         },
       });
@@ -549,16 +462,12 @@ export async function createProduction(
       const updated = await tx.packaging.updateMany({
         where: {
           id: item.packagingId,
-
           shopId: shop.id,
-
           isActive: true,
-
           stockQty: {
             gte: item.quantityUsed,
           },
         },
-
         data: {
           stockQty: {
             decrement: item.quantityUsed,
@@ -576,9 +485,7 @@ export async function createProduction(
       await tx.productionPackaging.create({
         data: {
           productionId: createdProduction.id,
-
           packagingId: item.packagingId,
-
           quantityUsed: item.quantityUsed,
         },
       });
@@ -611,44 +518,51 @@ export async function createProduction(
       const createdItem = await tx.productionItem.create({
         data: {
           productionId: createdProduction.id,
-
           variantId: item.variantId,
-
           quantityProduced: item.quantityProduced,
-
           remainingQuantity: item.quantityProduced,
-
           expiresAt,
         },
       });
 
       // ============================================
-      // STOCK FINI
+      // STOCK FINI CENTRAL
+      //
+      // shopId = boutique principale
+      // pointOfSaleId = null
+      //
+      // La production alimente le stock central.
       // ============================================
 
-      const finishedStock = await tx.finishedStock.upsert({
+      let finishedStock = await tx.finishedStock.findFirst({
         where: {
-          pointOfSaleId_variantId: {
-            pointOfSaleId: mainPointOfSale.id,
-
-            variantId: item.variantId,
-          },
-        },
-
-        create: {
-          pointOfSaleId: mainPointOfSale.id,
-
+          shopId: shop.id,
+          pointOfSaleId: null,
           variantId: item.variantId,
-
-          quantity: item.quantityProduced,
-        },
-
-        update: {
-          quantity: {
-            increment: item.quantityProduced,
-          },
         },
       });
+
+      if (finishedStock) {
+        finishedStock = await tx.finishedStock.update({
+          where: {
+            id: finishedStock.id,
+          },
+          data: {
+            quantity: {
+              increment: item.quantityProduced,
+            },
+          },
+        });
+      } else {
+        finishedStock = await tx.finishedStock.create({
+          data: {
+            shopId: shop.id,
+            pointOfSaleId: null,
+            variantId: item.variantId,
+            quantity: item.quantityProduced,
+          },
+        });
+      }
 
       // ============================================
       // ENTRÉE DE STOCK
@@ -657,15 +571,10 @@ export async function createProduction(
       const entry = await tx.finishedStockEntry.create({
         data: {
           finishedStockId: finishedStock.id,
-
           quantity: item.quantityProduced,
-
           origin: "PRODUCTION",
-
           note: input.notes?.trim() || null,
-
           createdById: managerId,
-
           productionItemId: createdItem.id,
         },
       });
@@ -677,13 +586,9 @@ export async function createProduction(
       await tx.finishedStockLot.create({
         data: {
           finishedStockId: finishedStock.id,
-
           entryId: entry.id,
-
           quantity: item.quantityProduced,
-
           remainingQuantity: item.quantityProduced,
-
           expiresAt,
         },
       });
@@ -697,22 +602,12 @@ export async function createProduction(
       where: {
         id: createdProduction.id,
       },
-
       include: {
         manager: {
           select: {
             id: true,
             name: true,
             telephone: true,
-          },
-        },
-
-        pointOfSale: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            isMainStore: true,
           },
         },
 
@@ -761,22 +656,12 @@ export async function getProductionById(productionId: string) {
     where: {
       id: productionId,
     },
-
     include: {
       manager: {
         select: {
           id: true,
           name: true,
           telephone: true,
-        },
-      },
-
-      pointOfSale: {
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          isMainStore: true,
         },
       },
 
@@ -822,25 +707,15 @@ export async function getProductionById(productionId: string) {
 export async function getProductions(
   query: Partial<ProductionQueryInput> = {},
 ) {
-  const { productId, pointOfSaleId, from, to, limit = 20, page = 1 } = query;
+  const { productId, from, to, limit = 20, page = 1 } = query;
 
   const shop = await getMainShop();
 
-  const where: Prisma.ProductionWhereInput = {
-    pointOfSale: {
-      shopId: shop.id,
-    },
-  };
-
   // ====================================================
-  // FILTRE POS
+  // FILTRES
   // ====================================================
 
-  if (pointOfSaleId) {
-    const pointOfSale = await getPointOfSale(pointOfSaleId, shop.id);
-
-    where.pointOfSaleId = pointOfSale.id;
-  }
+  const where: Prisma.ProductionWhereInput = {};
 
   // ====================================================
   // FILTRE PRODUIT
@@ -905,7 +780,6 @@ export async function getProductions(
       },
 
       skip,
-
       take: limit,
 
       include: {
@@ -914,15 +788,6 @@ export async function getProductions(
             id: true,
             name: true,
             telephone: true,
-          },
-        },
-
-        pointOfSale: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            isMainStore: true,
           },
         },
 
@@ -946,6 +811,7 @@ export async function getProductions(
                   select: {
                     id: true,
                     name: true,
+                    shopId: true,
                   },
                 },
 
@@ -969,14 +835,36 @@ export async function getProductions(
     }),
   ]);
 
+  // ====================================================
+  // SÉCURITÉ : LES PRODUCTIONS APPARTIENNENT À LA SHOP
+  // ====================================================
+  //
+  // Le modèle Production ne possède plus shopId.
+  // La boutique est donc déterminée via les produits
+  // associés à la production.
+  //
+  // Comme une production ne peut concerner qu'un seul
+  // produit, product.shopId permet de conserver cette
+  // information dans la réponse.
+  //
+  // Le filtre shopId est donc effectué côté résultat.
+
+  const shopProductions = productions.filter((production) => {
+    const firstItem = production.items[0];
+
+    return firstItem?.variant.product?.shopId === shop.id;
+  });
+
   return {
-    productions,
+    productions: shopProductions,
 
     pagination: {
       page,
       limit,
-      total,
-
+      total:
+        shopProductions.length < productions.length
+          ? shopProductions.length
+          : total,
       totalPages: Math.ceil(total / limit),
     },
   };

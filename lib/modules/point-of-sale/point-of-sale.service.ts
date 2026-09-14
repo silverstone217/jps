@@ -154,32 +154,45 @@ const getPointOfSaleForShop = async (pointOfSaleId: string, shopId: string) => {
 // ============================================================
 
 const getPointOfSaleStats = async (pointOfSaleId: string) => {
-  const [finishedStockCount, salesCount, lossCount, productionCount] =
-    await Promise.all([
-      prisma.finishedStock.count({
-        where: {
-          pointOfSaleId,
-        },
-      }),
+  const [finishedStockCount, salesCount, lossCount] = await Promise.all([
+    prisma.finishedStock.count({
+      where: {
+        pointOfSaleId,
+      },
+    }),
 
-      prisma.sale.count({
-        where: {
-          pointOfSaleId,
-        },
-      }),
+    prisma.sale.count({
+      where: {
+        pointOfSaleId,
+      },
+    }),
 
-      prisma.loss.count({
-        where: {
-          pointOfSaleId,
-        },
-      }),
+    prisma.loss.count({
+      where: {
+        pointOfSaleId,
+      },
+    }),
+  ]);
 
-      prisma.production.count({
-        where: {
-          pointOfSaleId,
-        },
-      }),
-    ]);
+  /*
+   * Depuis la nouvelle architecture :
+   *
+   * Production n'a plus de pointOfSaleId.
+   *
+   * Une production appartient au niveau de la boutique
+   * et alimente ensuite le stock central.
+   *
+   * On conserve productionCount dans la réponse pour
+   * préserver le contrat actuel avec le frontend, mais
+   * il n'est plus possible de calculer un nombre de
+   * productions appartenant à ce POS.
+   *
+   * La valeur sera donc toujours 0 ici.
+   *
+   * Les statistiques de production devront être calculées
+   * au niveau de la boutique / module Production.
+   */
+  const productionCount = 0;
 
   return {
     finishedStockCount,
@@ -228,7 +241,9 @@ export const createPointOfSale = async (
   const code = data.code.trim().toUpperCase();
   const telephone = data.telephone?.trim() || null;
   const address = data.address?.trim() || null;
+
   const isMainStore = data.isMainStore ?? false;
+
   const isActive = data.isActive ?? true;
 
   // ==========================================================
@@ -265,9 +280,9 @@ export const createPointOfSale = async (
   // ==========================================================
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
-    // --------------------------------------------------------
+    // ------------------------------------------------------
     // SI LE NOUVEAU POS EST PRINCIPAL
-    // --------------------------------------------------------
+    // ------------------------------------------------------
 
     if (isMainStore) {
       await tx.pointOfSale.updateMany({
@@ -282,9 +297,9 @@ export const createPointOfSale = async (
       });
     }
 
-    // --------------------------------------------------------
+    // ------------------------------------------------------
     // CRÉER LE POS
-    // --------------------------------------------------------
+    // ------------------------------------------------------
 
     return tx.pointOfSale.create({
       data: {
@@ -331,7 +346,9 @@ export const updatePointOfSale = async (
 
   const name = data.name.trim();
   const code = data.code.trim().toUpperCase();
+
   const telephone = data.telephone?.trim() || null;
+
   const address = data.address?.trim() || null;
 
   // ==========================================================
@@ -386,9 +403,9 @@ export const updatePointOfSale = async (
   // ==========================================================
 
   const pointOfSale = await prisma.$transaction(async (tx) => {
-    // --------------------------------------------------------
+    // ------------------------------------------------------
     // SI CE POS DEVIENT PRINCIPAL
-    // --------------------------------------------------------
+    // ------------------------------------------------------
 
     if (isMainStore) {
       await tx.pointOfSale.updateMany({
@@ -406,9 +423,9 @@ export const updatePointOfSale = async (
       });
     }
 
-    // --------------------------------------------------------
+    // ------------------------------------------------------
     // MISE À JOUR DU POS
-    // --------------------------------------------------------
+    // ------------------------------------------------------
 
     return tx.pointOfSale.update({
       where: {
@@ -471,7 +488,6 @@ export const deletePointOfSale = async (
     transferToCount,
     saleCount,
     lossCount,
-    productionCount,
   ] = await Promise.all([
     prisma.staffAssignment.count({
       where: {
@@ -508,12 +524,6 @@ export const deletePointOfSale = async (
         pointOfSaleId,
       },
     }),
-
-    prisma.production.count({
-      where: {
-        pointOfSaleId,
-      },
-    }),
   ]);
 
   const hasRelatedData =
@@ -522,8 +532,7 @@ export const deletePointOfSale = async (
     transferFromCount > 0 ||
     transferToCount > 0 ||
     saleCount > 0 ||
-    lossCount > 0 ||
-    productionCount > 0;
+    lossCount > 0;
 
   if (hasRelatedData) {
     throw new Error("POINT_OF_SALE_HAS_RELATED_DATA");
@@ -562,11 +571,9 @@ export const getPointOfSales = async (userId: string) => {
       {
         isMainStore: "desc",
       },
-
       {
         isActive: "desc",
       },
-
       {
         name: "asc",
       },
@@ -624,29 +631,29 @@ export const assignEmployeeToPointOfSale = async (
   pointOfSaleId: string,
   employeeId: string,
 ) => {
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER LA BOUTIQUE
-  // ==========================================================
+  // ========================================================
 
   const shop = await getShopByOwnerId(userId);
 
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER LE POS
-  // ==========================================================
+  // ========================================================
 
   const pointOfSale = await getPointOfSaleForShop(pointOfSaleId, shop.id);
 
-  // ==========================================================
+  // ========================================================
   // LE POS DOIT ÊTRE ACTIF
-  // ==========================================================
+  // ========================================================
 
   if (!pointOfSale.isActive) {
     throw new Error("POINT_OF_SALE_INACTIVE");
   }
 
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER L'EMPLOYÉ
-  // ==========================================================
+  // ========================================================
 
   const employee = await prisma.user.findFirst({
     where: {
@@ -672,9 +679,9 @@ export const assignEmployeeToPointOfSale = async (
     throw new Error("EMPLOYEE_NOT_FOUND");
   }
 
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER SI L'EMPLOYÉ EST DÉJÀ AFFECTÉ
-  // ==========================================================
+  // ========================================================
 
   const existingAssignment = await prisma.staffAssignment.findFirst({
     where: {
@@ -688,9 +695,9 @@ export const assignEmployeeToPointOfSale = async (
     },
   });
 
-  // ==========================================================
+  // ========================================================
   // UN EMPLOYÉ NE PEUT AVOIR QU'UNE AFFECTATION ACTIVE
-  // ==========================================================
+  // ========================================================
 
   if (existingAssignment) {
     if (existingAssignment.pointOfSaleId === pointOfSaleId) {
@@ -700,9 +707,9 @@ export const assignEmployeeToPointOfSale = async (
     throw new Error("EMPLOYEE_ALREADY_ASSIGNED");
   }
 
-  // ==========================================================
+  // ========================================================
   // CRÉER L'AFFECTATION
-  // ==========================================================
+  // ========================================================
 
   await prisma.staffAssignment.create({
     data: {
@@ -713,9 +720,9 @@ export const assignEmployeeToPointOfSale = async (
     },
   });
 
-  // ==========================================================
+  // ========================================================
   // RÉCUPÉRER LE POS MIS À JOUR
-  // ==========================================================
+  // ========================================================
 
   return getCompletePointOfSale(pointOfSaleId);
 };
@@ -729,21 +736,21 @@ export const removeEmployeeFromPointOfSale = async (
   pointOfSaleId: string,
   employeeId: string,
 ) => {
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER LA BOUTIQUE
-  // ==========================================================
+  // ========================================================
 
   const shop = await getShopByOwnerId(userId);
 
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER LE POS
-  // ==========================================================
+  // ========================================================
 
   await getPointOfSaleForShop(pointOfSaleId, shop.id);
 
-  // ==========================================================
+  // ========================================================
   // VÉRIFIER L'AFFECTATION ACTIVE
-  // ==========================================================
+  // ========================================================
 
   const assignment = await prisma.staffAssignment.findFirst({
     where: {
@@ -762,9 +769,9 @@ export const removeEmployeeFromPointOfSale = async (
     throw new Error("EMPLOYEE_ASSIGNMENT_NOT_FOUND");
   }
 
-  // ==========================================================
+  // ========================================================
   // DÉSACTIVER L'AFFECTATION
-  // ==========================================================
+  // ========================================================
   //
   // IMPORTANT :
   // On ne supprime pas l'enregistrement.
@@ -781,9 +788,9 @@ export const removeEmployeeFromPointOfSale = async (
     },
   });
 
-  // ==========================================================
+  // ========================================================
   // RÉCUPÉRER LE POS MIS À JOUR
-  // ==========================================================
+  // ========================================================
 
   return getCompletePointOfSale(pointOfSaleId);
 };
