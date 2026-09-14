@@ -1,8 +1,10 @@
 import { Prisma } from "@/app/generated/prisma/client";
+
 import {
   CreateProductionInput,
   ProductionQueryInput,
 } from "./production.schema";
+
 import { prisma } from "@/lib/prisma";
 
 // ======================================================
@@ -29,6 +31,7 @@ function decimalToNumber(value: Prisma.Decimal | number): number {
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
+
   result.setDate(result.getDate() + days);
 
   return result;
@@ -56,7 +59,33 @@ async function getMainShop() {
 }
 
 // ======================================================
-// POINT DE VENTE
+// POS PRINCIPAL
+// ======================================================
+
+async function getMainPointOfSale(shopId: string) {
+  const pointOfSale = await prisma.pointOfSale.findFirst({
+    where: {
+      shopId,
+      isMainStore: true,
+      isActive: true,
+    },
+    orderBy: {
+      name: "asc",
+    },
+  });
+
+  if (!pointOfSale) {
+    throw new ProductionServiceError(
+      "POINT_OF_SALE_NOT_FOUND",
+      "La boutique principale ne possède aucun point de vente principal actif.",
+    );
+  }
+
+  return pointOfSale;
+}
+
+// ======================================================
+// POS
 // ======================================================
 
 async function getPointOfSale(pointOfSaleId: string, shopId: string) {
@@ -173,7 +202,7 @@ async function validatePackagings(
       );
     }
 
-    if (packaging.stockQty < item.quantityUsed) {
+    if (Number(packaging.stockQty) < item.quantityUsed) {
       throw new ProductionServiceError(
         "INSUFFICIENT_PACKAGING_STOCK",
         `Stock insuffisant pour "${packaging.name}". Stock disponible : ${packaging.stockQty}. Quantité demandée : ${item.quantityUsed}.`,
@@ -187,11 +216,6 @@ async function validatePackagings(
 // ======================================================
 // VALIDATION DES VARIANTES
 // ======================================================
-//
-// Une production doit concerner un seul produit.
-//
-// Le produit est déduit des variantes.
-// ======================================================
 
 async function validateProductionItems(
   shopId: string,
@@ -204,10 +228,12 @@ async function validateProductionItems(
       id: {
         in: variantIds,
       },
+
       product: {
         shopId,
       },
     },
+
     include: {
       product: {
         include: {
@@ -218,6 +244,7 @@ async function validateProductionItems(
           },
         },
       },
+
       packaging: true,
     },
   });
@@ -273,17 +300,7 @@ async function validateProductionItems(
 }
 
 // ======================================================
-// VALIDATION DE LA COHÉRENCE DES EMBALLAGES
-// ======================================================
-//
-// Chaque variante produite utilise l'emballage associé
-// à cette variante.
-//
-// Exemple :
-// Variante 500 ml → bouteille 500 ml.
-//
-// La quantité d'emballages déclarée doit couvrir les
-// quantités produites.
+// COHÉRENCE EMBALLAGES / PRODUITS
 // ======================================================
 
 function validatePackagingUsage(
@@ -352,6 +369,7 @@ export async function createProduction(
     where: {
       id: managerId,
     },
+
     select: {
       id: true,
       role: true,
@@ -395,10 +413,18 @@ export async function createProduction(
   }
 
   // ====================================================
-  // POINT DE VENTE
+  // POS PRINCIPAL
+  // ====================================================
+  //
+  // IMPORTANT :
+  // Le client ne choisit PAS le POS.
+  //
+  // Toute production est réalisée
+  // dans la boutique principale.
+  //
   // ====================================================
 
-  await getPointOfSale(input.pointOfSaleId, shop.id);
+  const mainPointOfSale = await getMainPointOfSale(shop.id);
 
   // ====================================================
   // MATIÈRES PREMIÈRES
@@ -427,13 +453,6 @@ export async function createProduction(
   // ====================================================
   // DATE DE PRODUCTION
   // ====================================================
-  //
-  // IMPORTANT :
-  // le client ne fournit jamais producedAt.
-  //
-  // Le serveur définit le moment réel de
-  // l'enregistrement de la production.
-  // ====================================================
 
   const producedAt = new Date();
 
@@ -449,9 +468,14 @@ export async function createProduction(
     const createdProduction = await tx.production.create({
       data: {
         managerId,
-        pointOfSaleId: input.pointOfSaleId,
+
+        // POS DÉTERMINÉ PAR LE SERVEUR
+        pointOfSaleId: mainPointOfSale.id,
+
         totalVolumeMl: input.totalVolumeMl,
+
         notes: input.notes?.trim() || null,
+
         producedAt,
       },
     });
@@ -473,12 +497,16 @@ export async function createProduction(
       const updated = await tx.rawIngredient.updateMany({
         where: {
           id: item.ingredientId,
+
           shopId: shop.id,
+
           isActive: true,
+
           stockQty: {
             gte: item.quantityUsed,
           },
         },
+
         data: {
           stockQty: {
             decrement: item.quantityUsed,
@@ -496,7 +524,9 @@ export async function createProduction(
       await tx.productionIngredient.create({
         data: {
           productionId: createdProduction.id,
+
           ingredientId: item.ingredientId,
+
           quantityUsed: item.quantityUsed,
         },
       });
@@ -519,12 +549,16 @@ export async function createProduction(
       const updated = await tx.packaging.updateMany({
         where: {
           id: item.packagingId,
+
           shopId: shop.id,
+
           isActive: true,
+
           stockQty: {
             gte: item.quantityUsed,
           },
         },
+
         data: {
           stockQty: {
             decrement: item.quantityUsed,
@@ -542,7 +576,9 @@ export async function createProduction(
       await tx.productionPackaging.create({
         data: {
           productionId: createdProduction.id,
+
           packagingId: item.packagingId,
+
           quantityUsed: item.quantityUsed,
         },
       });
@@ -575,9 +611,13 @@ export async function createProduction(
       const createdItem = await tx.productionItem.create({
         data: {
           productionId: createdProduction.id,
+
           variantId: item.variantId,
+
           quantityProduced: item.quantityProduced,
+
           remainingQuantity: item.quantityProduced,
+
           expiresAt,
         },
       });
@@ -589,15 +629,20 @@ export async function createProduction(
       const finishedStock = await tx.finishedStock.upsert({
         where: {
           pointOfSaleId_variantId: {
-            pointOfSaleId: input.pointOfSaleId,
+            pointOfSaleId: mainPointOfSale.id,
+
             variantId: item.variantId,
           },
         },
+
         create: {
-          pointOfSaleId: input.pointOfSaleId,
+          pointOfSaleId: mainPointOfSale.id,
+
           variantId: item.variantId,
+
           quantity: item.quantityProduced,
         },
+
         update: {
           quantity: {
             increment: item.quantityProduced,
@@ -612,24 +657,33 @@ export async function createProduction(
       const entry = await tx.finishedStockEntry.create({
         data: {
           finishedStockId: finishedStock.id,
+
           quantity: item.quantityProduced,
+
           origin: "PRODUCTION",
+
           note: input.notes?.trim() || null,
+
           createdById: managerId,
+
           productionItemId: createdItem.id,
         },
       });
 
       // ============================================
-      // LOT DE STOCK
+      // LOT
       // ============================================
 
       await tx.finishedStockLot.create({
         data: {
           finishedStockId: finishedStock.id,
+
           entryId: entry.id,
+
           quantity: item.quantityProduced,
+
           remainingQuantity: item.quantityProduced,
+
           expiresAt,
         },
       });
@@ -643,6 +697,7 @@ export async function createProduction(
       where: {
         id: createdProduction.id,
       },
+
       include: {
         manager: {
           select: {
@@ -706,6 +761,7 @@ export async function getProductionById(productionId: string) {
     where: {
       id: productionId,
     },
+
     include: {
       manager: {
         select: {
@@ -763,15 +819,10 @@ export async function getProductionById(productionId: string) {
 // LISTE DES PRODUCTIONS
 // ======================================================
 
-export async function getProductions(query?: ProductionQueryInput) {
-  const {
-    productId,
-    pointOfSaleId,
-    from,
-    to,
-    limit = 20,
-    page = 1,
-  } = query ?? {};
+export async function getProductions(
+  query: Partial<ProductionQueryInput> = {},
+) {
+  const { productId, pointOfSaleId, from, to, limit = 20, page = 1 } = query;
 
   const shop = await getMainShop();
 
@@ -782,19 +833,17 @@ export async function getProductions(query?: ProductionQueryInput) {
   };
 
   // ====================================================
-  // FILTRE PDV
+  // FILTRE POS
   // ====================================================
 
   if (pointOfSaleId) {
-    where.pointOfSaleId = pointOfSaleId;
+    const pointOfSale = await getPointOfSale(pointOfSaleId, shop.id);
+
+    where.pointOfSaleId = pointOfSale.id;
   }
 
   // ====================================================
   // FILTRE PRODUIT
-  // ====================================================
-  //
-  // Production n'a pas productId.
-  // On filtre via ProductionItem → Variant → Product.
   // ====================================================
 
   if (productId) {
@@ -850,16 +899,21 @@ export async function getProductions(query?: ProductionQueryInput) {
   const [productions, total] = await prisma.$transaction([
     prisma.production.findMany({
       where,
+
       orderBy: {
         producedAt: "desc",
       },
+
       skip,
+
       take: limit,
+
       include: {
         manager: {
           select: {
             id: true,
             name: true,
+            telephone: true,
           },
         },
 
@@ -869,6 +923,18 @@ export async function getProductions(query?: ProductionQueryInput) {
             name: true,
             code: true,
             isMainStore: true,
+          },
+        },
+
+        ingredients: {
+          include: {
+            ingredient: true,
+          },
+        },
+
+        packagings: {
+          include: {
+            packaging: true,
           },
         },
 
@@ -905,10 +971,12 @@ export async function getProductions(query?: ProductionQueryInput) {
 
   return {
     productions,
+
     pagination: {
       page,
       limit,
       total,
+
       totalPages: Math.ceil(total / limit),
     },
   };
