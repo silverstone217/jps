@@ -73,8 +73,6 @@ export type ProductionItemInput = z.infer<typeof productionItemSchema>;
 
 export const createProductionSchema = z
   .object({
-    pointOfSaleId: z.string().trim().min(1, "Le point de vente est requis"),
-
     totalVolumeMl: z
       .number({
         error: "Le volume total de production est requis",
@@ -110,10 +108,6 @@ export const createProductionSchema = z
       ),
   })
   .superRefine((data, ctx) => {
-    // ==================================================
-    // DOUBLONS MATIÈRES PREMIÈRES
-    // ==================================================
-
     const ingredientIds = data.ingredients.map((item) => item.ingredientId);
 
     if (new Set(ingredientIds).size !== ingredientIds.length) {
@@ -125,10 +119,6 @@ export const createProductionSchema = z
       });
     }
 
-    // ==================================================
-    // DOUBLONS EMBALLAGES
-    // ==================================================
-
     const packagingIds = data.packagings.map((item) => item.packagingId);
 
     if (new Set(packagingIds).size !== packagingIds.length) {
@@ -139,10 +129,6 @@ export const createProductionSchema = z
           "Un emballage ne peut apparaître qu'une seule fois dans une production",
       });
     }
-
-    // ==================================================
-    // DOUBLONS VARIANTES
-    // ==================================================
 
     const variantIds = data.items.map((item) => item.variantId);
 
