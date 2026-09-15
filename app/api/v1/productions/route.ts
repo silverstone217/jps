@@ -232,6 +232,12 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     if (error instanceof Error) {
+      console.error("POST /api/v1/productions ERROR:", {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      });
+
       switch (error.message) {
         // ==============================================
         // AUTH
@@ -500,7 +506,7 @@ export async function POST(request: Request) {
       }
     }
 
-    console.error("POST /api/v1/productions:", error);
+    console.error("POST /api/v1/productions UNHANDLED ERROR:", error);
 
     return NextResponse.json(
       {
