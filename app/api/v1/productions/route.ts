@@ -7,6 +7,7 @@ import { authorize } from "@/lib/modules/auth/authorize";
 import {
   createProduction,
   getProductions,
+  ProductionServiceError,
 } from "@/lib/modules/production/production.service";
 
 import {
@@ -33,8 +34,6 @@ export async function GET(request: Request) {
     const queryParams = {
       productId: searchParams.get("productId") || undefined,
 
-      pointOfSaleId: searchParams.get("pointOfSaleId") || undefined,
-
       from: searchParams.get("from") || undefined,
 
       to: searchParams.get("to") || undefined,
@@ -51,8 +50,16 @@ export async function GET(request: Request) {
     const result = productionQuerySchema.safeParse(queryParams);
 
     if (!result.success) {
-      const message = result.error.issues
-        .map((issue) => issue.message)
+      const issues = result.error.issues;
+
+      console.error("GET /api/v1/productions VALIDATION ERROR:", issues);
+
+      const message = issues
+        .map((issue) => {
+          const path = issue.path.join(".");
+
+          return path ? `${path}: ${issue.message}` : issue.message;
+        })
         .join(", ");
 
       return NextResponse.json(
@@ -83,8 +90,26 @@ export async function GET(request: Request) {
       },
     );
   } catch (error) {
+    // ==================================================
+    // LOG
+    // ==================================================
+
     if (error instanceof Error) {
-      switch (error.message) {
+      console.error("GET /api/v1/productions ERROR:", {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      });
+    } else {
+      console.error("GET /api/v1/productions UNKNOWN ERROR:", error);
+    }
+
+    // ==================================================
+    // SERVICE ERRORS
+    // ==================================================
+
+    if (error instanceof ProductionServiceError) {
+      switch (error.code) {
         // ==============================================
         // AUTH
         // ==============================================
@@ -151,10 +176,27 @@ export async function GET(request: Request) {
               status: 400,
             },
           );
+
+        // ==============================================
+        // FALLBACK SERVICE ERROR
+        // ==============================================
+
+        default:
+          return NextResponse.json(
+            {
+              success: false,
+              message: error.message,
+            },
+            {
+              status: 400,
+            },
+          );
       }
     }
 
-    console.error("GET /api/v1/productions:", error);
+    // ==================================================
+    // UNEXPECTED ERROR
+    // ==================================================
 
     return NextResponse.json(
       {
@@ -184,23 +226,49 @@ export async function POST(request: Request) {
     // BODY
     // ==================================================
 
-    const body = await request.json();
+    let body: unknown;
+
+    try {
+      body = await request.json();
+    } catch (error) {
+      console.error("POST /api/v1/productions INVALID JSON:", error);
+
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Le corps de la requête est invalide.",
+        },
+        {
+          status: 400,
+        },
+      );
+    }
 
     // ==================================================
-    // VALIDATION
+    // VALIDATION ZOD
     // ==================================================
 
     const result = createProductionSchema.safeParse(body);
 
     if (!result.success) {
+      console.error("POST /api/v1/productions VALIDATION ERROR:", {
+        issues: result.error.issues,
+        body,
+      });
+
       const message = result.error.issues
-        .map((issue) => issue.message)
+        .map((issue) => {
+          const path = issue.path.join(".");
+
+          return path ? `${path}: ${issue.message}` : issue.message;
+        })
         .join(", ");
 
       return NextResponse.json(
         {
           success: false,
           message,
+          issues: result.error.issues,
         },
         {
           status: 400,
@@ -216,6 +284,10 @@ export async function POST(request: Request) {
     //
     // Le client ne peut donc pas choisir
     // quel manager a créé la production.
+    //
+    // shopId est récupéré côté serveur.
+    // producedAt est généré côté serveur.
+    // expiresAt est calculé côté serveur.
     // ==================================================
 
     const production = await createProduction(payload.userId, result.data);
@@ -231,14 +303,33 @@ export async function POST(request: Request) {
       },
     );
   } catch (error) {
-    if (error instanceof Error) {
+    // ==================================================
+    // LOG COMPLET
+    // ==================================================
+
+    if (error instanceof ProductionServiceError) {
+      console.error("POST /api/v1/productions SERVICE ERROR:", {
+        name: error.name,
+        code: error.code,
+        message: error.message,
+        stack: error.stack,
+      });
+    } else if (error instanceof Error) {
       console.error("POST /api/v1/productions ERROR:", {
         name: error.name,
         message: error.message,
         stack: error.stack,
       });
+    } else {
+      console.error("POST /api/v1/productions UNKNOWN ERROR:", error);
+    }
 
-      switch (error.message) {
+    // ==================================================
+    // PRODUCTION SERVICE ERRORS
+    // ==================================================
+
+    if (error instanceof ProductionServiceError) {
+      switch (error.code) {
         // ==============================================
         // AUTH
         // ==============================================
@@ -248,6 +339,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Non autorisé",
+              code: error.code,
             },
             {
               status: 401,
@@ -259,6 +351,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Accès interdit",
+              code: error.code,
             },
             {
               status: 403,
@@ -274,6 +367,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Utilisateur introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -285,6 +379,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Votre compte est désactivé",
+              code: error.code,
             },
             {
               status: 403,
@@ -296,6 +391,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Votre compte est actuellement suspendu",
+              code: error.code,
             },
             {
               status: 403,
@@ -311,6 +407,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Boutique introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -320,12 +417,20 @@ export async function POST(request: Request) {
         // ==============================================
         // POINT DE VENTE
         // ==============================================
+        //
+        // Ces codes sont conservés pour compatibilité
+        // avec d'anciennes versions du service.
+        //
+        // La production actuelle ne dépend plus
+        // d'un point de vente.
+        // ==============================================
 
         case "POINT_OF_SALE_NOT_FOUND":
           return NextResponse.json(
             {
               success: false,
               message: "Point de vente introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -337,6 +442,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Ce point de vente est désactivé",
+              code: error.code,
             },
             {
               status: 400,
@@ -352,6 +458,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Une matière première sélectionnée est introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -363,6 +470,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Une matière première sélectionnée est désactivée",
+              code: error.code,
             },
             {
               status: 400,
@@ -373,8 +481,8 @@ export async function POST(request: Request) {
           return NextResponse.json(
             {
               success: false,
-              message:
-                "Stock insuffisant pour une ou plusieurs matières premières",
+              message: error.message,
+              code: error.code,
             },
             {
               status: 409,
@@ -390,6 +498,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Un emballage sélectionné est introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -401,6 +510,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Un emballage sélectionné est désactivé",
+              code: error.code,
             },
             {
               status: 400,
@@ -411,7 +521,8 @@ export async function POST(request: Request) {
           return NextResponse.json(
             {
               success: false,
-              message: "Stock insuffisant pour un ou plusieurs emballages",
+              message: error.message,
+              code: error.code,
             },
             {
               status: 409,
@@ -422,8 +533,8 @@ export async function POST(request: Request) {
           return NextResponse.json(
             {
               success: false,
-              message:
-                "La quantité d'emballages déclarée ne couvre pas la production",
+              message: error.message,
+              code: error.code,
             },
             {
               status: 400,
@@ -439,6 +550,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Une variante de produit sélectionnée est introuvable",
+              code: error.code,
             },
             {
               status: 404,
@@ -450,6 +562,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Une variante de produit sélectionnée est désactivée",
+              code: error.code,
             },
             {
               status: 400,
@@ -461,6 +574,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Le produit sélectionné est désactivé",
+              code: error.code,
             },
             {
               status: 400,
@@ -472,6 +586,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Le produit sélectionné ne possède pas de recette",
+              code: error.code,
             },
             {
               status: 400,
@@ -483,6 +598,7 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "Une production ne peut concerner qu'un seul produit",
+              code: error.code,
             },
             {
               status: 400,
@@ -498,15 +614,34 @@ export async function POST(request: Request) {
             {
               success: false,
               message: "La production est introuvable",
+              code: error.code,
             },
             {
               status: 404,
             },
           );
+
+        // ==============================================
+        // ERREUR MÉTIER NON RÉPERTORIÉE
+        // ==============================================
+
+        default:
+          return NextResponse.json(
+            {
+              success: false,
+              message: error.message,
+              code: error.code,
+            },
+            {
+              status: 400,
+            },
+          );
       }
     }
 
-    console.error("POST /api/v1/productions UNHANDLED ERROR:", error);
+    // ==================================================
+    // ERREUR INATTENDUE
+    // ==================================================
 
     return NextResponse.json(
       {
