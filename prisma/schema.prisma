@@ -125,6 +125,7 @@ model User {
 
   // Entrées de stock créées par l'utilisateur
   finishedStockEntries FinishedStockEntry[]
+  rawMaterialHistories RawMaterialHistory[]
 
   @@index([role])
   @@index([isActive])
@@ -179,7 +180,8 @@ model Shop {
   stockTransfers StockTransfer[]
 
   // Pertes
-  losses Loss[]
+  losses               Loss[]
+  rawMaterialHistories RawMaterialHistory[]
 
   @@index([name])
 }
@@ -282,10 +284,11 @@ model RawIngredient {
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
-  recipeItems      RecipeItem[]
-  purchases        RawMaterialPurchase[]
-  productionUsages ProductionIngredient[]
-  losses           Loss[]
+  recipeItems          RecipeItem[]
+  purchases            RawMaterialPurchase[]
+  productionUsages     ProductionIngredient[]
+  losses               Loss[]
+  rawMaterialHistories RawMaterialHistory[]
 
   @@unique([shopId, name])
   @@index([shopId])
@@ -313,10 +316,11 @@ model Packaging {
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
-  variants         ProductVariant[]
-  purchases        RawMaterialPurchase[]
-  productionUsages ProductionPackaging[]
-  losses           Loss[]
+  variants             ProductVariant[]
+  purchases            RawMaterialPurchase[]
+  productionUsages     ProductionPackaging[]
+  losses               Loss[]
+  rawMaterialHistories RawMaterialHistory[]
 
   @@unique([shopId, name, size])
   @@index([shopId])
@@ -897,4 +901,39 @@ model Loss {
   @@index([pointOfSaleId])
   @@index([reportedById])
   @@index([reportedAt])
+}
+
+// 26. Historique pour Packaging et Raw materials
+enum RawMaterialHistoryType {
+  INITIALIZATION
+  PURCHASE
+  PRODUCTION
+  LOSS
+  ADJUSTMENT
+}
+
+model RawMaterialHistory {
+  id String @id @default(cuid())
+
+  shopId       String
+  ingredientId String?
+  packagingId  String?
+
+  quantity Decimal                @db.Decimal(14, 3)
+  type     RawMaterialHistoryType
+  note     String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+
+  ingredient RawIngredient? @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  shop       Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  packaging Packaging? @relation(fields: [packagingId], references: [id], onDelete: Restrict)
+  createdBy User       @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([ingredientId, createdAt])
+  @@index([packagingId, createdAt])
+  @@index([type, createdAt])
+  @@index([createdById])
 }

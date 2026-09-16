@@ -1,5 +1,4 @@
 import { Prisma } from "@/app/generated/prisma/client";
-
 import {
   StockAdjustmentInput,
   StockQueryInput,
@@ -631,13 +630,9 @@ async function getRawIngredients(shopId: string) {
 
     return {
       ...ingredient,
-
       stockQty,
-
       minAlert,
-
       isOutOfStock: stockQty <= 0,
-
       isLowStock: stockQty > 0 && stockQty <= minAlert,
     };
   });
@@ -670,9 +665,7 @@ async function getPackagings(shopId: string) {
 
   return packagings.map((packaging) => ({
     ...packaging,
-
     isOutOfStock: packaging.stockQty <= 0,
-
     isLowStock:
       packaging.stockQty > 0 && packaging.stockQty <= packaging.minAlert,
   }));
@@ -1012,19 +1005,12 @@ export async function getStockByVariant(
 
     stock: {
       id: finishedStock.id,
-
       quantity: finishedStock.quantity,
-
       isOutOfStock: finishedStock.quantity === 0,
-
       expiredQuantity,
-
       hasExpiredStock: expiredQuantity > 0,
-
       nextExpiration,
-
       lots: finishedStock.lots,
-
       entries: finishedStock.entries,
     },
   };
@@ -1044,7 +1030,6 @@ async function consumeLotsForAdjustment(
   const lots = await tx.finishedStockLot.findMany({
     where: {
       finishedStockId,
-
       remainingQuantity: {
         gt: 0,
       },
@@ -1201,13 +1186,9 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
 
         return {
           finishedStockId: finishedStock.id,
-
           previousQuantity: 0,
-
           actualQuantity: input.actualQuantity,
-
           difference: input.actualQuantity,
-
           entryId: entry.id,
         };
       }
@@ -1223,7 +1204,6 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
       // ==============================================
 
       const previousQuantity = finishedStock.quantity;
-
       const difference = input.actualQuantity - previousQuantity;
 
       // ==============================================
@@ -1278,13 +1258,9 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
       const entry = await tx.finishedStockEntry.create({
         data: {
           finishedStockId: finishedStock.id,
-
           quantity: difference,
-
           origin: "AJUSTEMENT",
-
           note: input.note?.trim() || null,
-
           createdById: manager.id,
         },
       });
@@ -1297,13 +1273,9 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
         await tx.finishedStockLot.create({
           data: {
             finishedStockId: finishedStock.id,
-
             entryId: entry.id,
-
             quantity: difference,
-
             remainingQuantity: difference,
-
             expiresAt: null,
           },
         });
@@ -1334,13 +1306,9 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
 
       return {
         finishedStockId: finishedStock.id,
-
         previousQuantity,
-
         actualQuantity: input.actualQuantity,
-
         difference,
-
         entryId: entry.id,
       };
     },
@@ -1363,16 +1331,11 @@ export async function adjustStock(userId: string, input: StockAdjustmentInput) {
 
   return {
     ...updatedStock,
-
     adjustment: {
       finishedStockId: result.finishedStockId,
-
       previousQuantity: result.previousQuantity,
-
       actualQuantity: result.actualQuantity,
-
       difference: result.difference,
-
       entryId: result.entryId,
     },
   };

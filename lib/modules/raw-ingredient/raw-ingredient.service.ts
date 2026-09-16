@@ -5,6 +5,7 @@ import type {
   CreateRawIngredientInput,
   UpdateRawIngredientInput,
 } from "./raw-ingredient.schema";
+
 import { Prisma } from "@/app/generated/prisma/client";
 
 const rawIngredientSelect = {
@@ -130,17 +131,43 @@ export const createRawIngredient = async (
     throw new Error("RAW_INGREDIENT_ALREADY_EXISTS");
   }
 
+  const initialStock = new Prisma.Decimal(data.stockQty ?? 0);
+
   try {
-    const ingredient = await prisma.rawIngredient.create({
-      data: {
-        shopId: shop.id,
-        name,
-        unit: data.unit,
-        stockQty: new Prisma.Decimal(data.stockQty ?? 0),
-        minAlert: new Prisma.Decimal(data.minAlert ?? 5),
-        isActive: data.isActive ?? true,
-      },
-      select: rawIngredientSelect,
+    const ingredient = await prisma.$transaction(async (tx) => {
+      const created = await tx.rawIngredient.create({
+        data: {
+          shopId: shop.id,
+          name,
+          unit: data.unit,
+          stockQty: initialStock,
+          minAlert: new Prisma.Decimal(data.minAlert ?? 5),
+          isActive: data.isActive ?? true,
+        },
+        select: rawIngredientSelect,
+      });
+
+      /**
+       * Le stock initial devient
+       * une entrée d'historique.
+       *
+       * On ne crée pas de ligne si
+       * le stock initial est égal à 0.
+       */
+      if (initialStock.greaterThan(0)) {
+        await tx.rawMaterialHistory.create({
+          data: {
+            shopId: shop.id,
+            ingredientId: created.id,
+            quantity: initialStock,
+            type: "INITIALIZATION",
+            note: "Stock initial de l'ingrédient",
+            createdById: managerId,
+          },
+        });
+      }
+
+      return created;
     });
 
     return mapRawIngredient(ingredient);
@@ -222,9 +249,7 @@ export const setRawIngredientActive = async (
   isActive: boolean,
 ) => {
   const shop = await getShopByOwnerId(managerId);
-
   await getRawIngredientForShop(ingredientId, shop.id);
-
   const ingredient = await prisma.rawIngredient.update({
     where: {
       id: ingredientId,
@@ -244,27 +269,38 @@ export const adjustRawIngredientStock = async (
   data: AdjustRawIngredientStockInput,
 ) => {
   const shop = await getShopByOwnerId(managerId);
-
   const ingredient = await getRawIngredientForShop(ingredientId, shop.id);
-
   const currentStock = new Prisma.Decimal(ingredient.stockQty);
-
   const adjustment = new Prisma.Decimal(data.quantity);
-
   const newStock = currentStock.plus(adjustment);
 
   if (newStock.lessThan(0)) {
     throw new Error("INSUFFICIENT_RAW_INGREDIENT_STOCK");
   }
 
-  const updatedIngredient = await prisma.rawIngredient.update({
-    where: {
-      id: ingredientId,
-    },
-    data: {
-      stockQty: newStock,
-    },
-    select: rawIngredientSelect,
+  const updatedIngredient = await prisma.$transaction(async (tx) => {
+    const updated = await tx.rawIngredient.update({
+      where: {
+        id: ingredientId,
+      },
+      data: {
+        stockQty: newStock,
+      },
+      select: rawIngredientSelect,
+    });
+
+    await tx.rawMaterialHistory.create({
+      data: {
+        shopId: shop.id,
+        ingredientId: ingredient.id,
+        quantity: adjustment,
+        type: "ADJUSTMENT",
+        note: data.note?.trim() || null,
+        createdById: managerId,
+      },
+    });
+
+    return updated;
   });
 
   return mapRawIngredient(updatedIngredient);
@@ -278,38 +314,50 @@ export const deleteRawIngredient = async (
 
   const ingredient = await getRawIngredientForShop(ingredientId, shop.id);
 
-  const [recipeItemsCount, purchasesCount, productionUsagesCount, lossesCount] =
-    await Promise.all([
-      prisma.recipeItem.count({
-        where: {
-          ingredientId: ingredient.id,
-        },
-      }),
+  const [
+    recipeItemsCount,
+    purchasesCount,
+    productionUsagesCount,
+    lossesCount,
+    rawMaterialHistoryCount,
+  ] = await Promise.all([
+    prisma.recipeItem.count({
+      where: {
+        ingredientId: ingredient.id,
+      },
+    }),
 
-      prisma.rawMaterialPurchase.count({
-        where: {
-          ingredientId: ingredient.id,
-        },
-      }),
+    prisma.rawMaterialPurchase.count({
+      where: {
+        ingredientId: ingredient.id,
+      },
+    }),
 
-      prisma.productionIngredient.count({
-        where: {
-          ingredientId: ingredient.id,
-        },
-      }),
+    prisma.productionIngredient.count({
+      where: {
+        ingredientId: ingredient.id,
+      },
+    }),
 
-      prisma.loss.count({
-        where: {
-          ingredientId: ingredient.id,
-        },
-      }),
-    ]);
+    prisma.loss.count({
+      where: {
+        ingredientId: ingredient.id,
+      },
+    }),
+
+    prisma.rawMaterialHistory.count({
+      where: {
+        ingredientId: ingredient.id,
+      },
+    }),
+  ]);
 
   const hasHistory =
     recipeItemsCount > 0 ||
     purchasesCount > 0 ||
     productionUsagesCount > 0 ||
-    lossesCount > 0;
+    lossesCount > 0 ||
+    rawMaterialHistoryCount > 0;
 
   if (hasHistory) {
     throw new Error("RAW_INGREDIENT_HAS_HISTORY");

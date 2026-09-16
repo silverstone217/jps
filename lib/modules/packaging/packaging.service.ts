@@ -31,15 +31,10 @@ const mapPackaging = (packaging: PackagingEntity) => {
     shopId: packaging.shopId,
     name: packaging.name,
     size: packaging.size,
-
-    // Toujours retourner des primitives JS au client
     capacityMl: Number(packaging.capacityMl),
     stockQty: Number(packaging.stockQty),
     minAlert: Number(packaging.minAlert),
-
     isActive: packaging.isActive,
-
-    // Éviter de laisser des objets Date Prisma
     createdAt: packaging.createdAt.toISOString(),
     updatedAt: packaging.updatedAt.toISOString(),
   };
@@ -98,17 +93,7 @@ export const getPackagings = async (managerId: string) => {
     where: {
       shopId: shop.id,
     },
-    orderBy: [
-      {
-        isActive: "desc",
-      },
-      {
-        size: "asc",
-      },
-      {
-        name: "asc",
-      },
-    ],
+    orderBy: [{ isActive: "desc" }, { size: "asc" }, { name: "asc" }],
     select: packagingSelect,
   });
 
@@ -133,8 +118,6 @@ export const createPackaging = async (
 
   validatePackagingSize(data.size, data.capacityMl);
 
-  // Le même nom est autorisé pour une taille différente.
-  // L'unicité est donc : shop + nom + taille.
   const existingPackaging = await prisma.packaging.findFirst({
     where: {
       shopId: shop.id,
@@ -153,18 +136,42 @@ export const createPackaging = async (
     throw new Error("PACKAGING_ALREADY_EXISTS");
   }
 
+  const initialStock = data.stockQty ?? 0;
+
   try {
-    const packaging = await prisma.packaging.create({
-      data: {
-        shopId: shop.id,
-        name,
-        size: data.size,
-        capacityMl: data.capacityMl,
-        stockQty: data.stockQty ?? 0,
-        minAlert: data.minAlert ?? 50,
-        isActive: data.isActive ?? true,
-      },
-      select: packagingSelect,
+    const packaging = await prisma.$transaction(async (tx) => {
+      const created = await tx.packaging.create({
+        data: {
+          shopId: shop.id,
+          name,
+          size: data.size,
+          capacityMl: data.capacityMl,
+          stockQty: initialStock,
+          minAlert: data.minAlert ?? 50,
+          isActive: data.isActive ?? true,
+        },
+        select: packagingSelect,
+      });
+
+      /**
+       * Le stock initial est une entrée
+       * d'historique uniquement s'il est
+       * supérieur à zéro.
+       */
+      if (initialStock > 0) {
+        await tx.rawMaterialHistory.create({
+          data: {
+            shopId: shop.id,
+            packagingId: created.id,
+            quantity: initialStock,
+            type: "INITIALIZATION",
+            note: "Stock initial de l'emballage",
+            createdById: managerId,
+          },
+        });
+      }
+
+      return created;
     });
 
     return mapPackaging(packaging);
@@ -193,8 +200,6 @@ export const updatePackaging = async (
 
   validatePackagingSize(data.size, data.capacityMl);
 
-  // Le même nom est autorisé pour une taille différente.
-  // On exclut l'emballage actuellement modifié.
   const existingPackaging = await prisma.packaging.findFirst({
     where: {
       shopId: shop.id,
@@ -226,7 +231,6 @@ export const updatePackaging = async (
         size: data.size,
         capacityMl: data.capacityMl,
         minAlert: data.minAlert,
-
         ...(data.isActive !== undefined && {
           isActive: data.isActive,
         }),
@@ -288,14 +292,29 @@ export const adjustPackagingStock = async (
     throw new Error("INSUFFICIENT_PACKAGING_STOCK");
   }
 
-  const updatedPackaging = await prisma.packaging.update({
-    where: {
-      id: packagingId,
-    },
-    data: {
-      stockQty: newStock,
-    },
-    select: packagingSelect,
+  const updatedPackaging = await prisma.$transaction(async (tx) => {
+    const updated = await tx.packaging.update({
+      where: {
+        id: packagingId,
+      },
+      data: {
+        stockQty: newStock,
+      },
+      select: packagingSelect,
+    });
+
+    await tx.rawMaterialHistory.create({
+      data: {
+        shopId: shop.id,
+        packagingId: packaging.id,
+        quantity: adjustment,
+        type: "ADJUSTMENT",
+        note: data.note?.trim() || null,
+        createdById: managerId,
+      },
+    });
+
+    return updated;
   });
 
   return mapPackaging(updatedPackaging);
@@ -309,38 +328,50 @@ export const deletePackaging = async (
 
   const packaging = await getPackagingForShop(packagingId, shop.id);
 
-  const [variantsCount, purchasesCount, productionUsagesCount, lossesCount] =
-    await Promise.all([
-      prisma.productVariant.count({
-        where: {
-          packagingId: packaging.id,
-        },
-      }),
+  const [
+    variantsCount,
+    purchasesCount,
+    productionUsagesCount,
+    lossesCount,
+    rawMaterialHistoryCount,
+  ] = await Promise.all([
+    prisma.productVariant.count({
+      where: {
+        packagingId: packaging.id,
+      },
+    }),
 
-      prisma.rawMaterialPurchase.count({
-        where: {
-          packagingId: packaging.id,
-        },
-      }),
+    prisma.rawMaterialPurchase.count({
+      where: {
+        packagingId: packaging.id,
+      },
+    }),
 
-      prisma.productionPackaging.count({
-        where: {
-          packagingId: packaging.id,
-        },
-      }),
+    prisma.productionPackaging.count({
+      where: {
+        packagingId: packaging.id,
+      },
+    }),
 
-      prisma.loss.count({
-        where: {
-          packagingId: packaging.id,
-        },
-      }),
-    ]);
+    prisma.loss.count({
+      where: {
+        packagingId: packaging.id,
+      },
+    }),
+
+    prisma.rawMaterialHistory.count({
+      where: {
+        packagingId: packaging.id,
+      },
+    }),
+  ]);
 
   const hasHistory =
     variantsCount > 0 ||
     purchasesCount > 0 ||
     productionUsagesCount > 0 ||
-    lossesCount > 0;
+    lossesCount > 0 ||
+    rawMaterialHistoryCount > 0;
 
   if (hasHistory) {
     throw new Error("PACKAGING_HAS_HISTORY");

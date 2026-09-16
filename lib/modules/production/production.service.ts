@@ -31,7 +31,9 @@ function decimalToNumber(value: Prisma.Decimal | number): number {
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
+
   result.setDate(result.getDate() + days);
+
   return result;
 }
 
@@ -443,6 +445,21 @@ export async function createProduction(
           quantityUsed: item.quantityUsed,
         },
       });
+
+      // ============================================
+      // HISTORIQUE MATIÈRE PREMIÈRE
+      // ============================================
+
+      await tx.rawMaterialHistory.create({
+        data: {
+          shopId: shop.id,
+          ingredientId: item.ingredientId,
+          quantity: new Prisma.Decimal(item.quantityUsed).neg(),
+          type: "PRODUCTION",
+          note: `Consommation pour la production ${createdProduction.id}`,
+          createdById: managerId,
+        },
+      });
     }
 
     // ==============================================
@@ -489,6 +506,21 @@ export async function createProduction(
           quantityUsed: item.quantityUsed,
         },
       });
+
+      // ============================================
+      // HISTORIQUE EMBALLAGE
+      // ============================================
+
+      await tx.rawMaterialHistory.create({
+        data: {
+          shopId: shop.id,
+          packagingId: item.packagingId,
+          quantity: new Prisma.Decimal(item.quantityUsed).neg(),
+          type: "PRODUCTION",
+          note: `Consommation pour la production ${createdProduction.id}`,
+          createdById: managerId,
+        },
+      });
     }
 
     // ==============================================
@@ -531,7 +563,8 @@ export async function createProduction(
       // shopId = boutique principale
       // pointOfSaleId = null
       //
-      // La production alimente le stock central.
+      // La production alimente
+      // le stock central.
       // ============================================
 
       let finishedStock = await tx.finishedStock.findFirst({
@@ -610,19 +643,16 @@ export async function createProduction(
             telephone: true,
           },
         },
-
         ingredients: {
           include: {
             ingredient: true,
           },
         },
-
         packagings: {
           include: {
             packaging: true,
           },
         },
-
         items: {
           include: {
             variant: {
@@ -664,19 +694,16 @@ export async function getProductionById(productionId: string) {
           telephone: true,
         },
       },
-
       ingredients: {
         include: {
           ingredient: true,
         },
       },
-
       packagings: {
         include: {
           packaging: true,
         },
       },
-
       items: {
         include: {
           variant: {
@@ -774,14 +801,11 @@ export async function getProductions(
   const [productions, total] = await prisma.$transaction([
     prisma.production.findMany({
       where,
-
       orderBy: {
         producedAt: "desc",
       },
-
       skip,
       take: limit,
-
       include: {
         manager: {
           select: {
@@ -790,19 +814,16 @@ export async function getProductions(
             telephone: true,
           },
         },
-
         ingredients: {
           include: {
             ingredient: true,
           },
         },
-
         packagings: {
           include: {
             packaging: true,
           },
         },
-
         items: {
           include: {
             variant: {
@@ -814,7 +835,6 @@ export async function getProductions(
                     shopId: true,
                   },
                 },
-
                 packaging: {
                   select: {
                     id: true,
@@ -838,16 +858,19 @@ export async function getProductions(
   // ====================================================
   // SÉCURITÉ : LES PRODUCTIONS APPARTIENNENT À LA SHOP
   // ====================================================
-  //
-  // Le modèle Production ne possède plus shopId.
-  // La boutique est donc déterminée via les produits
-  // associés à la production.
-  //
-  // Comme une production ne peut concerner qu'un seul
-  // produit, product.shopId permet de conserver cette
-  // information dans la réponse.
-  //
-  // Le filtre shopId est donc effectué côté résultat.
+
+  /*
+   * Le modèle Production ne possède plus shopId.
+   *
+   * La boutique est donc déterminée via les produits
+   * associés à la production.
+   *
+   * Comme une production ne peut concerner qu'un seul
+   * produit, product.shopId permet de conserver cette
+   * information dans la réponse.
+   *
+   * Le filtre shopId est donc effectué côté résultat.
+   */
 
   const shopProductions = productions.filter((production) => {
     const firstItem = production.items[0];
