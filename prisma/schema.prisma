@@ -630,7 +630,6 @@ model ProductionPackaging {
 // ======================================================
 // 17. LOTS DE PRODUCTION
 // ======================================================
-
 model ProductionItem {
   id String @id @default(cuid())
 
