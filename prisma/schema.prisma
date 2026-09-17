@@ -492,6 +492,7 @@ model FinishedStock {
   lots    FinishedStockLot[]
   entries FinishedStockEntry[]
 
+  @@unique([shopId, pointOfSaleId, variantId])
   @@index([shopId])
   @@index([pointOfSaleId])
   @@index([variantId])
@@ -549,9 +550,10 @@ model FinishedStockLot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  finishedStock FinishedStock @relation(fields: [finishedStockId], references: [id], onDelete: Restrict)
+  losses Loss[]
 
-  entry FinishedStockEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  finishedStock FinishedStock      @relation(fields: [finishedStockId], references: [id], onDelete: Restrict)
+  entry         FinishedStockEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
 
   @@index([finishedStockId])
   @@index([expiresAt])
@@ -859,36 +861,27 @@ model Loss {
   shopId String
 
   category LossCategory
-
-  reason LossReason
-
-  note String?
+  reason   LossReason
+  note     String?
 
   pointOfSaleId String?
+  ingredientId  String?
 
-  ingredientId String?
+  packagingId        String?
+  variantId          String?
+  reportedById       String
+  finishedStockLotId String?
 
-  packagingId String?
-
-  variantId String?
-
-  quantity Decimal @db.Decimal(14, 3)
-
-  reportedById String
-
+  quantity   Decimal  @db.Decimal(14, 3)
   reportedAt DateTime @default(now())
 
-  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
-  pointOfSale PointOfSale? @relation(fields: [pointOfSaleId], references: [id], onDelete: SetNull)
-
-  ingredient RawIngredient? @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
-
-  packaging Packaging? @relation(fields: [packagingId], references: [id], onDelete: SetNull)
-
-  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
-
-  reportedBy User @relation(fields: [reportedById], references: [id], onDelete: Restrict)
+  shop             Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  pointOfSale      PointOfSale?      @relation(fields: [pointOfSaleId], references: [id], onDelete: SetNull)
+  ingredient       RawIngredient?    @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  packaging        Packaging?        @relation(fields: [packagingId], references: [id], onDelete: SetNull)
+  variant          ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  reportedBy       User              @relation(fields: [reportedById], references: [id], onDelete: Restrict)
+  finishedStockLot FinishedStockLot? @relation(fields: [finishedStockLotId], references: [id], onDelete: SetNull)
 
   @@index([shopId])
   @@index([category])
@@ -896,6 +889,7 @@ model Loss {
   @@index([pointOfSaleId])
   @@index([reportedById])
   @@index([reportedAt])
+  @@index([finishedStockLotId])
 }
 
 // 26. Historique pour Packaging et Raw materials
