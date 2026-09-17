@@ -846,30 +846,40 @@ const getStockSummary = async (
 // ======================================================
 
 export const getStock = async (userId: string, query: StockQueryInput) => {
+  console.log("========== STOCK START ==========");
+
+  console.log("STOCK 1 - userId:", userId);
+  console.log("STOCK 2 - query:", query);
+
   const requestedLocation = query.locationType
     ? {
         locationType: query.locationType,
-
         pointOfSaleId: query.pointOfSaleId,
       }
     : undefined;
+
+  console.log("STOCK 3 - requestedLocation:", requestedLocation);
 
   const { shop, stockLocation } = await resolveStockLocation(
     userId,
     requestedLocation,
   );
 
-  const category = query.category;
+  console.log("STOCK 4 - location resolved:", stockLocation);
+
+  console.log("STOCK 5 - shop:", shop.id);
 
   const summary = await getStockSummary(shop.id, stockLocation.pointOfSaleId);
 
+  console.log("STOCK 6 - summary:", summary);
+
   const location = buildStockLocation(stockLocation);
 
-  // ====================================================
-  // MATIÈRES PREMIÈRES
-  // ====================================================
+  console.log("STOCK 7 - location:", location);
 
-  if (category === "RAW_INGREDIENT") {
+  if (query.category === "RAW_INGREDIENT") {
+    console.log("STOCK 8 - loading raw ingredients");
+
     if (stockLocation.type !== "MAIN") {
       throw new StockServiceError(
         "INVALID_CATEGORY",
@@ -879,20 +889,20 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
 
     const result = await getRawIngredients(shop.id, query);
 
+    console.log("STOCK 9 - raw ingredients loaded:", result.items.length);
+
     return {
       location,
-      category,
+      category: query.category,
       items: result.items,
       pagination: result.pagination,
       summary,
     };
   }
 
-  // ====================================================
-  // EMBALLAGES
-  // ====================================================
+  if (query.category === "PACKAGING") {
+    console.log("STOCK 8 - loading packagings");
 
-  if (category === "PACKAGING") {
     if (stockLocation.type !== "MAIN") {
       throw new StockServiceError(
         "INVALID_CATEGORY",
@@ -902,38 +912,38 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
 
     const result = await getPackagings(shop.id, query);
 
+    console.log("STOCK 9 - packagings loaded:", result.items.length);
+
     return {
       location,
-      category,
+      category: query.category,
       items: result.items,
       pagination: result.pagination,
       summary,
     };
   }
 
-  // ====================================================
-  // PRODUITS FINIS
-  // ====================================================
+  if (query.category === "FINISHED_PRODUCT") {
+    console.log("STOCK 8 - loading finished products");
 
-  if (category === "FINISHED_PRODUCT") {
     const result = await getFinishedProducts(
       shop.id,
       stockLocation.pointOfSaleId,
       query,
     );
 
+    console.log("STOCK 9 - finished products loaded:", result.items.length);
+
     return {
       location,
-      category,
+      category: query.category,
       items: result.items,
       pagination: result.pagination,
       summary,
     };
   }
 
-  // ====================================================
-  // AUCUNE CATÉGORIE
-  // ====================================================
+  console.log("STOCK 8 - loading all categories");
 
   const rawIngredients =
     stockLocation.type === "MAIN"
@@ -943,6 +953,8 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
           pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
         };
 
+  console.log("STOCK 9 - raw ingredients:", rawIngredients.items.length);
+
   const packagings =
     stockLocation.type === "MAIN"
       ? await getPackagings(shop.id, query)
@@ -951,15 +963,18 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
           pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
         };
 
+  console.log("STOCK 10 - packagings:", packagings.items.length);
+
   const finishedProducts = await getFinishedProducts(
     shop.id,
     stockLocation.pointOfSaleId,
     query,
   );
 
-  return {
-    location,
+  console.log("STOCK 11 - finished products:", finishedProducts.items.length);
 
+  const result = {
+    location,
     categories: {
       rawIngredients: {
         items: rawIngredients.items,
@@ -976,9 +991,14 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
         pagination: finishedProducts.pagination,
       },
     },
-
     summary,
   };
+
+  console.log("STOCK 12 - response ready");
+
+  console.log("========== STOCK END ==========");
+
+  return result;
 };
 
 // ======================================================
