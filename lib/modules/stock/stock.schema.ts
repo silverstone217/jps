@@ -1,25 +1,105 @@
 import { z } from "zod";
 
 // ======================================================
-// FILTRES STOCK
+// LOCALISATION DU STOCK
+// ======================================================
+
+export const stockLocationSchema = z
+  .object({
+    locationType: z.enum(["MAIN", "POS"], {
+      error: "Le type d'emplacement est invalide",
+    }),
+
+    pointOfSaleId: z
+      .string()
+      .trim()
+      .min(1, "L'identifiant du point de vente est requis")
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.locationType === "POS" && !data.pointOfSaleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pointOfSaleId"],
+        message: "Le point de vente est requis.",
+      });
+    }
+
+    if (data.locationType === "MAIN" && data.pointOfSaleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pointOfSaleId"],
+        message: "Le stock principal ne nécessite pas de point de vente.",
+      });
+    }
+  });
+
+export type StockLocationInput = z.infer<typeof stockLocationSchema>;
+
+// ======================================================
+// CATÉGORIE DE STOCK
+// ======================================================
+
+export const stockCategorySchema = z.enum(
+  ["RAW_INGREDIENT", "PACKAGING", "FINISHED_PRODUCT"],
+  {
+    error: "La catégorie de stock est invalide",
+  },
+);
+
+export type StockCategory = z.infer<typeof stockCategorySchema>;
+
+// ======================================================
+// FILTRES DU STOCK
 // ======================================================
 
 export const stockQuerySchema = z.object({
+  locationType: z
+    .enum(["MAIN", "POS"], {
+      error: "Le type d'emplacement est invalide",
+    })
+    .optional(),
+
   pointOfSaleId: z
     .string()
     .trim()
     .min(1, "L'identifiant du point de vente est invalide")
     .optional(),
 
-  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  category: stockCategorySchema.optional(),
 
-  page: z.coerce.number().int().min(1).optional().default(1),
+  search: z
+    .string()
+    .trim()
+    .max(100, "La recherche ne peut pas dépasser 100 caractères")
+    .optional(),
+
+  lowStock: z.coerce
+    .boolean({
+      error: "Le filtre de stock faible est invalide",
+    })
+    .optional(),
+
+  page: z.coerce
+    .number()
+    .int()
+    .min(1, "La page doit être supérieure ou égale à 1")
+    .optional()
+    .default(1),
+
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1, "La limite doit être supérieure ou égale à 1")
+    .max(50, "La limite ne peut pas dépasser 50")
+    .optional()
+    .default(20),
 });
 
 export type StockQueryInput = z.infer<typeof stockQuerySchema>;
 
 // ======================================================
-// IDENTIFIANT VARIANTE
+// IDENTIFIANT D'UNE VARIANTE
 // ======================================================
 
 export const stockVariantIdSchema = z.object({
@@ -30,71 +110,3 @@ export const stockVariantIdSchema = z.object({
 });
 
 export type StockVariantIdInput = z.infer<typeof stockVariantIdSchema>;
-
-// ======================================================
-// FILTRES DÉTAIL STOCK VARIANTE
-// ======================================================
-
-export const stockVariantQuerySchema = z.object({
-  pointOfSaleId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant du point de vente est invalide")
-    .optional(),
-});
-
-export type StockVariantQueryInput = z.infer<typeof stockVariantQuerySchema>;
-
-// ======================================================
-// AJUSTEMENT D'INVENTAIRE
-// ======================================================
-//
-// IMPORTANT :
-//
-// - variantId → envoyé par le client
-// - pointOfSaleId → envoyé uniquement pour un stock PDV
-// - null / absent → stock central
-// - actualQuantity → quantité réellement comptée
-// - note → commentaire facultatif
-//
-// Le serveur détermine :
-//
-// - shopId
-// - utilisateur connecté
-// - quantité actuelle
-// - différence d'inventaire
-// - FinishedStock
-// - FinishedStockEntry
-// - FinishedStockLot
-// - date de l'ajustement
-// ======================================================
-
-export const stockAdjustmentSchema = z.object({
-  variantId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant de la variante est requis"),
-
-  pointOfSaleId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant du point de vente est invalide")
-    .nullable()
-    .optional(),
-
-  actualQuantity: z
-    .number({
-      error: "La quantité réelle est requise",
-    })
-    .int("La quantité réelle doit être un nombre entier")
-    .nonnegative("La quantité réelle ne peut pas être négative"),
-
-  note: z
-    .string()
-    .trim()
-    .max(500, "La note ne peut pas dépasser 500 caractères")
-    .optional()
-    .or(z.literal("")),
-});
-
-export type StockAdjustmentInput = z.infer<typeof stockAdjustmentSchema>;

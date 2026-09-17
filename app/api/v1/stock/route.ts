@@ -8,71 +8,57 @@ import { getStock, StockServiceError } from "@/lib/modules/stock/stock.service";
 
 import { stockQuerySchema } from "@/lib/modules/stock/stock.schema";
 
-// ======================================================
-// RÔLES AUTORISÉS
-// ======================================================
-//
-// MANAGER
-// → stock central
-// → stock de tous les PDV
-// → matières premières
-// → packaging
-//
-// EMPLOYEE
-// → uniquement les jus finis de son PDV assigné
-//
-// ======================================================
-
 const ALLOWED_ROLES: Role[] = ["MANAGER", "EMPLOYEE"];
 
-// ======================================================
+// ============================================================
 // GET /api/v1/stock
-// ======================================================
+// ============================================================
 
 export async function GET(request: Request) {
   try {
-    // ====================================================
-    // AUTHENTIFICATION
-    // ====================================================
+    // ========================================================
+    // AUTHENTIFICATION / RÔLE
+    // ========================================================
 
     const payload = await authorize(request, ALLOWED_ROLES);
 
-    // ====================================================
+    // ========================================================
     // QUERY PARAMS
-    // ====================================================
+    // ========================================================
 
-    const { searchParams } = new URL(request.url);
+    const url = new URL(request.url);
 
-    const queryParams = {
-      pointOfSaleId: searchParams.get("pointOfSaleId") || undefined,
+    const rawQuery = {
+      locationType: url.searchParams.get("locationType") ?? undefined,
 
-      limit: searchParams.get("limit") || undefined,
+      pointOfSaleId: url.searchParams.get("pointOfSaleId") ?? undefined,
 
-      page: searchParams.get("page") || undefined,
+      category: url.searchParams.get("category") ?? undefined,
+
+      search: url.searchParams.get("search") ?? undefined,
+
+      lowStock: url.searchParams.get("lowStock") ?? undefined,
+
+      page: url.searchParams.get("page") ?? undefined,
+
+      limit: url.searchParams.get("limit") ?? undefined,
     };
 
-    // ====================================================
+    // ========================================================
     // VALIDATION
-    // ====================================================
+    // ========================================================
 
-    const result = stockQuerySchema.safeParse(queryParams);
+    const result = stockQuerySchema.safeParse(rawQuery);
 
     if (!result.success) {
-      console.error("GET /api/v1/stock VALIDATION ERROR:", result.error.issues);
-
       const message = result.error.issues
-        .map((issue) => {
-          const path = issue.path.join(".");
-
-          return path ? `${path}: ${issue.message}` : issue.message;
-        })
+        .map((issue) => issue.message)
         .join(", ");
 
       return NextResponse.json(
         {
           success: false,
           message,
-          issues: result.error.issues,
         },
         {
           status: 400,
@@ -80,304 +66,202 @@ export async function GET(request: Request) {
       );
     }
 
-    // ====================================================
-    // SERVICE
-    // ====================================================
-    //
-    // IMPORTANT :
-    //
-    // Pour un EMPLOYEE, le service ignore le
-    // pointOfSaleId envoyé par le client et récupère
-    // automatiquement le PDV depuis StaffAssignment.
-    //
-    // Pour un MANAGER, le pointOfSaleId permet de choisir
-    // le stock central ou celui d'un PDV.
-    //
-    // ====================================================
+    // ========================================================
+    // RÉCUPÉRATION DU STOCK
+    // ========================================================
 
     const stock = await getStock(payload.userId, result.data);
 
-    // ====================================================
-    // SUCCESS
-    // ====================================================
+    // ========================================================
+    // SUCCÈS
+    // ========================================================
 
     return NextResponse.json(
       {
         success: true,
-
-        shop: stock.shop,
-
-        location: stock.location,
-
-        rawIngredients: stock.rawIngredients,
-
-        packagings: stock.packagings,
-
-        finishedStocks: stock.finishedStocks,
-
-        pagination: stock.pagination,
+        stock,
       },
       {
         status: 200,
       },
     );
   } catch (error) {
-    // ====================================================
-    // LOGGING
-    // ====================================================
-
-    if (error instanceof StockServiceError) {
-      console.error("GET /api/v1/stock SERVICE ERROR:", {
-        name: error.name,
-        code: error.code,
-        message: error.message,
-        stack: error.stack,
-      });
-    } else if (error instanceof Error) {
-      console.error("GET /api/v1/stock ERROR:", {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      });
-    } else {
-      console.error("GET /api/v1/stock UNKNOWN ERROR:", error);
-    }
-
-    // ====================================================
-    // AUTHENTIFICATION
-    // ====================================================
-
     if (error instanceof Error) {
-      if (error.message === "UNAUTHORIZED") {
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Non autorisé",
-            code: "UNAUTHORIZED",
-          },
-          {
-            status: 401,
-          },
-        );
-      }
+      switch (error.message) {
+        // ----------------------------------------------------
+        // AUTHENTIFICATION
+        // ----------------------------------------------------
 
-      if (error.message === "FORBIDDEN") {
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Accès interdit",
-            code: "FORBIDDEN",
-          },
-          {
-            status: 403,
-          },
-        );
-      }
-    }
-
-    // ====================================================
-    // ERREURS MÉTIER
-    // ====================================================
-
-    if (error instanceof StockServiceError) {
-      switch (error.code) {
-        // ==============================================
-        // UTILISATEUR
-        // ==============================================
-
-        case "USER_NOT_FOUND":
+        case "UNAUTHORIZED":
           return NextResponse.json(
             {
               success: false,
-              message: "Utilisateur introuvable",
-              code: error.code,
+              message: "Non autorisé",
             },
             {
-              status: 404,
+              status: 401,
             },
           );
 
-        case "USER_INACTIVE":
+        // ----------------------------------------------------
+        // AUTORISATION
+        // ----------------------------------------------------
+
+        case "FORBIDDEN":
           return NextResponse.json(
             {
               success: false,
-              message: "Votre compte est désactivé",
-              code: error.code,
+              message: "Accès interdit",
             },
             {
               status: 403,
             },
           );
 
-        case "USER_BANNED":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Votre compte est actuellement suspendu",
-              code: error.code,
-            },
-            {
-              status: 403,
-            },
-          );
-
-        // ==============================================
-        // AFFECTATION PDV
-        // ==============================================
-
-        case "POS_ASSIGNMENT_REQUIRED":
-          return NextResponse.json(
-            {
-              success: false,
-
-              message:
-                "Vous n'êtes affecté à aucun point de vente. Veuillez demander à un manager de vous affecter à un point de vente avant de consulter le stock.",
-
-              code: error.code,
-            },
-            {
-              status: 403,
-            },
-          );
-
-        // ==============================================
-        // PDV
-        // ==============================================
-
-        case "POS_NOT_FOUND":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Point de vente introuvable",
-              code: error.code,
-            },
-            {
-              status: 404,
-            },
-          );
-
-        case "POS_INACTIVE":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Le point de vente est actuellement désactivé",
-              code: error.code,
-            },
-            {
-              status: 403,
-            },
-          );
-
-        // ==============================================
-        // BOUTIQUE
-        // ==============================================
+        // ----------------------------------------------------
+        // BOUTIQUE INTROUVABLE
+        // ----------------------------------------------------
 
         case "SHOP_NOT_FOUND":
           return NextResponse.json(
             {
               success: false,
               message: "Boutique introuvable",
-              code: error.code,
             },
             {
               status: 404,
             },
           );
 
-        // ==============================================
-        // VARIANTE
-        // ==============================================
+        // ----------------------------------------------------
+        // UTILISATEUR INTROUVABLE
+        // ----------------------------------------------------
 
-        case "VARIANT_NOT_FOUND":
+        case "USER_NOT_FOUND":
           return NextResponse.json(
             {
               success: false,
-              message: "Variante de produit introuvable",
-              code: error.code,
+              message: "Utilisateur introuvable",
             },
             {
               status: 404,
             },
           );
 
-        case "VARIANT_INACTIVE":
+        // ----------------------------------------------------
+        // UTILISATEUR INACTIF
+        // ----------------------------------------------------
+
+        case "USER_INACTIVE":
           return NextResponse.json(
             {
               success: false,
-              message: "La variante de produit est désactivée",
-              code: error.code,
+              message: "Votre compte est désactivé",
+            },
+            {
+              status: 403,
+            },
+          );
+
+        // ----------------------------------------------------
+        // UTILISATEUR BLOQUÉ
+        // ----------------------------------------------------
+
+        case "USER_BANNED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Votre compte est actuellement bloqué",
+            },
+            {
+              status: 403,
+            },
+          );
+
+        // ----------------------------------------------------
+        // PDV INTROUVABLE
+        // ----------------------------------------------------
+
+        case "POS_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Point de vente introuvable",
+            },
+            {
+              status: 404,
+            },
+          );
+
+        // ----------------------------------------------------
+        // PDV INACTIF
+        // ----------------------------------------------------
+
+        case "POS_INACTIVE":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Ce point de vente est actuellement désactivé",
             },
             {
               status: 400,
             },
           );
 
-        case "PRODUCT_INACTIVE":
+        // ----------------------------------------------------
+        // EMPLOYÉ NON AFFECTÉ
+        // ----------------------------------------------------
+
+        case "POS_NOT_ASSIGNED":
           return NextResponse.json(
             {
               success: false,
-              message: "Le produit est désactivé",
-              code: error.code,
-            },
-            {
-              status: 400,
-            },
-          );
-
-        // ==============================================
-        // STOCK
-        // ==============================================
-
-        case "STOCK_INCONSISTENCY":
-          return NextResponse.json(
-            {
-              success: false,
-
               message:
-                "Une incohérence a été détectée dans le stock. Veuillez contacter un manager.",
-
-              code: error.code,
+                "Vous n'êtes actuellement affecté à aucun point de vente",
             },
             {
-              status: 409,
+              status: 403,
             },
           );
 
-        case "INVALID_STOCK_LOT":
+        // ----------------------------------------------------
+        // CATÉGORIE INVALIDE POUR L'EMPLACEMENT
+        // ----------------------------------------------------
+
+        case "INVALID_CATEGORY":
           return NextResponse.json(
             {
               success: false,
-
-              message: "Un lot de stock contient des données incohérentes.",
-
-              code: error.code,
-            },
-            {
-              status: 409,
-            },
-          );
-
-        // ==============================================
-        // AUTRES ERREURS MÉTIER
-        // ==============================================
-
-        default:
-          return NextResponse.json(
-            {
-              success: false,
-              message: error.message,
-              code: error.code,
+              message:
+                "Cette catégorie de stock n'est pas disponible dans cet emplacement",
             },
             {
               status: 400,
+            },
+          );
+
+        // ----------------------------------------------------
+        // PRODUIT INTROUVABLE
+        // ----------------------------------------------------
+
+        case "STOCK_PRODUCT_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Produit introuvable dans cet emplacement de stock",
+            },
+            {
+              status: 404,
             },
           );
       }
     }
 
-    // ====================================================
-    // ERREUR INTERNE
-    // ====================================================
+    // ========================================================
+    // ERREUR INATTENDUE
+    // ========================================================
+
+    console.error("GET /api/v1/stock:", error);
 
     return NextResponse.json(
       {

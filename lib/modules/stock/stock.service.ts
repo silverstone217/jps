@@ -1,19 +1,15 @@
 import { Prisma } from "@/app/generated/prisma/client";
-import {
-  StockAdjustmentInput,
-  StockQueryInput,
-  StockVariantQueryInput,
-} from "./stock.schema";
-
 import { prisma } from "@/lib/prisma";
 
+import type { StockLocationInput, StockQueryInput } from "./stock.schema";
+
 // ======================================================
-// ERREURS MÉTIER
+// ERREURS DU SERVICE
 // ======================================================
 
 export class StockServiceError extends Error {
   constructor(
-    public readonly code: string,
+    public code: string,
     message: string,
   ) {
     super(message);
@@ -22,25 +18,134 @@ export class StockServiceError extends Error {
 }
 
 // ======================================================
-// HELPERS
+// TYPES
 // ======================================================
 
-function decimalToNumber(value: Prisma.Decimal | number): number {
-  return Number(value);
-}
+// type StockLocation = {
+//   type: "MAIN" | "POS";
+//   pointOfSaleId: string | null;
+//   pointOfSaleName: string | null;
+// };
 
-function normalizePointOfSaleId(pointOfSaleId?: string | null): string | null {
-  return pointOfSaleId?.trim() || null;
-}
+type Pagination = {
+  page: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+};
+
+// ======================================================
+// UTILITAIRES
+// ======================================================
+
+const decimalToNumber = (value: Prisma.Decimal) => {
+  return value.toNumber();
+};
+
+const normalizeSearch = (search?: string) => {
+  const value = search?.trim();
+
+  return value || undefined;
+};
+
+const buildPagination = (
+  page: number,
+  limit: number,
+  total: number,
+): Pagination => {
+  return {
+    page,
+    limit,
+    total,
+    hasMore: page * limit < total,
+  };
+};
+
+// ======================================================
+// UTILISATEUR
+// ======================================================
+
+const getUser = async (userId: string) => {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+
+    select: {
+      id: true,
+      role: true,
+      isActive: true,
+      isBanned: true,
+
+      shopOwner: {
+        select: {
+          id: true,
+          ownerId: true,
+          name: true,
+          currency: true,
+        },
+      },
+
+      assignments: {
+        where: {
+          isActive: true,
+        },
+
+        orderBy: {
+          createdAt: "asc",
+        },
+
+        select: {
+          id: true,
+          shopId: true,
+          pointOfSaleId: true,
+
+          pointOfSale: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              isActive: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!user) {
+    throw new StockServiceError("USER_NOT_FOUND", "Utilisateur introuvable.");
+  }
+
+  if (!user.isActive) {
+    throw new StockServiceError("USER_INACTIVE", "Votre compte est désactivé.");
+  }
+
+  if (user.isBanned) {
+    throw new StockServiceError(
+      "USER_BANNED",
+      "Votre compte est actuellement bloqué.",
+    );
+  }
+
+  return user;
+};
 
 // ======================================================
 // BOUTIQUE PRINCIPALE
 // ======================================================
 
-async function getMainShop() {
+const getMainShop = async () => {
   const shop = await prisma.shop.findUnique({
     where: {
       singleton: "MAIN",
+    },
+
+    select: {
+      id: true,
+      name: true,
+      ownerId: true,
+      currency: true,
     },
   });
 
@@ -52,269 +157,26 @@ async function getMainShop() {
   }
 
   return shop;
-}
+};
 
 // ======================================================
-// UTILISATEUR
+// AUTORISATION MANAGER
 // ======================================================
 
-async function getStockUser(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: {
-      id: userId,
-    },
-
-    select: {
-      id: true,
-      name: true,
-      telephone: true,
-      role: true,
-
-      isActive: true,
-      isBanned: true,
-      banExpiresAt: true,
-
-      assignments: {
-        where: {
-          isActive: true,
-        },
-
-        select: {
-          id: true,
-          shopId: true,
-          pointOfSaleId: true,
-        },
-      },
-    },
-  });
-
-  if (!user) {
-    throw new StockServiceError(
-      "USER_NOT_FOUND",
-      "L'utilisateur est introuvable.",
-    );
-  }
-
-  if (!user.isActive) {
-    throw new StockServiceError("USER_INACTIVE", "Votre compte est désactivé.");
-  }
-
-  if (user.isBanned) {
-    const banStillActive = !user.banExpiresAt || user.banExpiresAt > new Date();
-
-    if (banStillActive) {
-      throw new StockServiceError(
-        "USER_BANNED",
-        "Votre compte est actuellement suspendu.",
-      );
-    }
-  }
-
-  return user;
-}
-
-// ======================================================
-// PDV DE L'EMPLOYÉ
-// ======================================================
-//
-// IMPORTANT :
-//
-// L'employé ne choisit JAMAIS son PDV depuis le client.
-//
-// Le serveur récupère son StaffAssignment actif.
-//
-// Si aucun assignment n'existe :
-//
-// → l'employé ne peut pas consulter le stock.
-//
-// ======================================================
-
-async function getEmployeePointOfSale(
-  user: Awaited<ReturnType<typeof getStockUser>>,
-  shopId: string,
-) {
-  const assignment = user.assignments.find((item) => item.shopId === shopId);
-
-  if (!assignment) {
-    throw new StockServiceError(
-      "POS_ASSIGNMENT_REQUIRED",
-      "Vous n'êtes affecté à aucun point de vente. Veuillez demander à un manager de vous affecter à un point de vente avant de consulter le stock.",
-    );
-  }
-
-  const pointOfSale = await prisma.pointOfSale.findFirst({
-    where: {
-      id: assignment.pointOfSaleId,
-      shopId,
-    },
-
-    select: {
-      id: true,
-      name: true,
-      code: true,
-      isActive: true,
-    },
-  });
-
-  if (!pointOfSale) {
-    throw new StockServiceError(
-      "POS_NOT_FOUND",
-      "Votre point de vente assigné est introuvable.",
-    );
-  }
-
-  if (!pointOfSale.isActive) {
-    throw new StockServiceError(
-      "POS_INACTIVE",
-      "Votre point de vente est actuellement désactivé.",
-    );
-  }
-
-  return pointOfSale;
-}
-
-// ======================================================
-// VÉRIFIER L'ACCÈS AU STOCK
-// ======================================================
-//
-// MANAGER
-// → peut consulter le stock central
-// → peut consulter n'importe quel PDV
-//
-// EMPLOYEE
-// → le serveur récupère automatiquement son PDV assigné
-// → ne peut consulter QUE ce PDV
-// → ne peut jamais consulter le central
-//
-// Le pointOfSaleId envoyé par le client est donc ignoré
-// pour les employés.
-//
-// ======================================================
-
-async function validateStockAccess(
-  userId: string,
-  shopId: string,
-  requestedPointOfSaleId: string | null,
-) {
-  const user = await getStockUser(userId);
-
-  // ====================================================
-  // MANAGER
-  // ====================================================
-
-  if (user.role === "MANAGER") {
-    // Stock central
-    if (!requestedPointOfSaleId) {
-      return {
-        user,
-        pointOfSaleId: null,
-        pointOfSale: null,
-      };
-    }
-
-    // Stock d'un PDV choisi par le manager
-    const pointOfSale = await prisma.pointOfSale.findFirst({
-      where: {
-        id: requestedPointOfSaleId,
-        shopId,
-      },
-
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        isActive: true,
-      },
-    });
-
-    if (!pointOfSale) {
-      throw new StockServiceError(
-        "POS_NOT_FOUND",
-        "Le point de vente sélectionné est introuvable.",
-      );
-    }
-
-    if (!pointOfSale.isActive) {
-      throw new StockServiceError(
-        "POS_INACTIVE",
-        "Le point de vente sélectionné est désactivé.",
-      );
-    }
-
-    return {
-      user,
-      pointOfSaleId: pointOfSale.id,
-      pointOfSale,
-    };
-  }
-
-  // ====================================================
-  // EMPLOYEE
-  // ====================================================
-
-  if (user.role !== "EMPLOYEE") {
+const validateManagerAccess = (userId: string, shopOwnerId: string | null) => {
+  if (shopOwnerId !== userId) {
     throw new StockServiceError(
       "FORBIDDEN",
-      "Vous n'êtes pas autorisé à consulter le stock.",
+      "Vous n'êtes pas autorisé à consulter le stock de cette boutique.",
     );
   }
-
-  // ====================================================
-  // RÉCUPÉRER LE PDV DEPUIS LE SERVEUR
-  // ====================================================
-
-  const employeePointOfSale = await getEmployeePointOfSale(user, shopId);
-
-  // ====================================================
-  // IMPORTANT
-  // ====================================================
-  //
-  // On ignore volontairement requestedPointOfSaleId.
-  //
-  // Exemple :
-  //
-  // GET /stock?pointOfSaleId=PDV_GOMBE
-  //
-  // Si l'employé est affecté à PDV_LIMETE,
-  // il verra quand même uniquement PDV_LIMETE.
-  //
-  // Le client ne peut donc pas choisir son stock.
-  //
-  // ====================================================
-
-  return {
-    user,
-    pointOfSaleId: employeePointOfSale.id,
-    pointOfSale: employeePointOfSale,
-  };
-}
+};
 
 // ======================================================
-// VÉRIFIER L'ACCÈS MANAGER
-// ======================================================
-//
-// Les ajustements physiques sont réservés au manager.
-//
+// POINT DE VENTE
 // ======================================================
 
-async function validateManager(userId: string) {
-  const user = await getStockUser(userId);
-
-  if (user.role !== "MANAGER") {
-    throw new StockServiceError(
-      "FORBIDDEN",
-      "Seul un manager peut effectuer un ajustement d'inventaire.",
-    );
-  }
-
-  return user;
-}
-
-// ======================================================
-// VALIDER UN PDV
-// ======================================================
-
-async function validatePointOfSale(shopId: string, pointOfSaleId: string) {
+const getPointOfSale = async (pointOfSaleId: string, shopId: string) => {
   const pointOfSale = await prisma.pointOfSale.findFirst({
     where: {
       id: pointOfSaleId,
@@ -323,8 +185,12 @@ async function validatePointOfSale(shopId: string, pointOfSaleId: string) {
 
     select: {
       id: true,
+      shopId: true,
       name: true,
       code: true,
+      telephone: true,
+      address: true,
+      isMainStore: true,
       isActive: true,
     },
   });
@@ -332,190 +198,541 @@ async function validatePointOfSale(shopId: string, pointOfSaleId: string) {
   if (!pointOfSale) {
     throw new StockServiceError(
       "POS_NOT_FOUND",
-      "Le point de vente sélectionné est introuvable.",
+      "Le point de vente demandé est introuvable.",
     );
   }
 
   if (!pointOfSale.isActive) {
     throw new StockServiceError(
       "POS_INACTIVE",
-      "Le point de vente sélectionné est désactivé.",
+      "Ce point de vente est actuellement désactivé.",
     );
   }
 
   return pointOfSale;
-}
+};
 
 // ======================================================
-// WHERE STOCK FINI
+// RÉSOUDRE L'EMPLACEMENT
 // ======================================================
 
-function getFinishedStockWhere(
-  shopId: string,
-  variantId?: string,
-  pointOfSaleId?: string | null,
-): Prisma.FinishedStockWhereInput {
-  return {
-    shopId,
+const resolveStockLocation = async (
+  userId: string,
+  location?: StockLocationInput,
+) => {
+  const user = await getUser(userId);
+  const shop = await getMainShop();
 
-    ...(variantId
-      ? {
-          variantId,
-        }
-      : {}),
+  // ====================================================
+  // MANAGER
+  // ====================================================
 
-    pointOfSaleId: normalizePointOfSaleId(pointOfSaleId),
-  };
-}
+  if (user.role === "MANAGER") {
+    validateManagerAccess(user.id, shop.ownerId);
 
-// ======================================================
-// VALIDER LA VARIANTE
-// ======================================================
+    if (!location) {
+      return {
+        user,
+        shop,
 
-async function getVariantForShop(shopId: string, variantId: string) {
-  const variant = await prisma.productVariant.findFirst({
-    where: {
-      id: variantId,
-
-      product: {
-        shopId,
-      },
-    },
-
-    include: {
-      product: {
-        select: {
-          id: true,
-          name: true,
-          image: true,
-          isActive: true,
-          shopId: true,
+        stockLocation: {
+          type: "MAIN" as const,
+          pointOfSaleId: null,
+          pointOfSaleName: null,
         },
-      },
+      };
+    }
 
-      packaging: {
-        select: {
-          id: true,
-          name: true,
-          size: true,
-          capacityMl: true,
-          isActive: true,
+    if (location.locationType === "MAIN") {
+      return {
+        user,
+        shop,
+
+        stockLocation: {
+          type: "MAIN" as const,
+          pointOfSaleId: null,
+          pointOfSaleName: null,
         },
-      },
-    },
-  });
+      };
+    }
 
-  if (!variant) {
-    throw new StockServiceError(
-      "VARIANT_NOT_FOUND",
-      "La variante du produit est introuvable.",
-    );
-  }
-
-  return variant;
-}
-
-// ======================================================
-// VÉRIFIER LA COHÉRENCE DES LOTS
-// ======================================================
-//
-// FinishedStock.quantity
-// doit correspondre à la somme des
-// FinishedStockLot.remainingQuantity.
-//
-// On ne répare jamais automatiquement une incohérence.
-//
-// ======================================================
-
-async function validateFinishedStockConsistency(
-  tx: Prisma.TransactionClient,
-  finishedStock: {
-    id: string;
-    quantity: number;
-  },
-) {
-  const lots = await tx.finishedStockLot.findMany({
-    where: {
-      finishedStockId: finishedStock.id,
-    },
-
-    select: {
-      id: true,
-      quantity: true,
-      remainingQuantity: true,
-      expiresAt: true,
-    },
-  });
-
-  let totalRemaining = 0;
-
-  for (const lot of lots) {
-    if (lot.remainingQuantity < 0 || lot.remainingQuantity > lot.quantity) {
+    if (!location.pointOfSaleId) {
       throw new StockServiceError(
-        "INVALID_STOCK_LOT",
-        "Un lot de stock contient une quantité incohérente.",
+        "POS_REQUIRED",
+        "Le point de vente est requis.",
       );
     }
 
-    totalRemaining += lot.remainingQuantity;
+    const pointOfSale = await getPointOfSale(location.pointOfSaleId, shop.id);
+
+    return {
+      user,
+      shop,
+
+      stockLocation: {
+        type: "POS" as const,
+        pointOfSaleId: pointOfSale.id,
+        pointOfSaleName: pointOfSale.name,
+      },
+    };
   }
 
-  if (totalRemaining !== finishedStock.quantity) {
+  // ====================================================
+  // EMPLOYEE
+  // ====================================================
+
+  const assignment = user.assignments.find(
+    (item) => item.shopId === shop.id && item.pointOfSale.isActive,
+  );
+
+  if (!assignment) {
     throw new StockServiceError(
-      "STOCK_INCONSISTENCY",
-      "Le stock agrégé ne correspond pas à la quantité restante des lots.",
+      "POS_NOT_ASSIGNED",
+      "Vous n'êtes actuellement affecté à aucun point de vente.",
     );
   }
 
-  return lots;
-}
+  if (location?.locationType === "MAIN") {
+    throw new StockServiceError(
+      "FORBIDDEN",
+      "Vous n'êtes pas autorisé à consulter le stock de la boutique principale.",
+    );
+  }
+
+  if (
+    location?.pointOfSaleId &&
+    location.pointOfSaleId !== assignment.pointOfSaleId
+  ) {
+    throw new StockServiceError(
+      "FORBIDDEN",
+      "Vous n'êtes pas autorisé à consulter ce point de vente.",
+    );
+  }
+
+  return {
+    user,
+    shop,
+
+    stockLocation: {
+      type: "POS" as const,
+      pointOfSaleId: assignment.pointOfSaleId,
+      pointOfSaleName: assignment.pointOfSale.name,
+    },
+  };
+};
 
 // ======================================================
-// RÉCUPÉRER LES STOCKS DE JUS FINIS
+// MATIÈRES PREMIÈRES
 // ======================================================
 
-async function getFinishedStocks(
+const getRawIngredients = async (
   shopId: string,
-  pointOfSaleId: string,
-  limit: number,
-  page: number,
-) {
-  const where = getFinishedStockWhere(shopId, undefined, pointOfSaleId);
+  query: StockQueryInput,
+): Promise<{
+  items: Array<{
+    id: string;
+    category: "RAW_INGREDIENT";
+    name: string;
+    unit: string;
+    quantity: number;
+    minAlert: number;
+    isLowStock: boolean;
+    isActive: boolean;
+    updatedAt: string;
+  }>;
+  pagination: Pagination;
+}> => {
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 20;
+  const search = normalizeSearch(query.search);
 
-  const skip = (page - 1) * limit;
+  const where = {
+    shopId,
 
-  const [finishedStocks, total] = await prisma.$transaction([
-    prisma.finishedStock.findMany({
+    stockQty: {
+      gt: 0,
+    },
+
+    ...(search && {
+      name: {
+        contains: search,
+        mode: "insensitive" as const,
+      },
+    }),
+  };
+
+  // ====================================================
+  // LOW STOCK
+  // ====================================================
+  //
+  // Prisma ne permet pas ici de comparer directement
+  // stockQty <= minAlert dans un where standard.
+  //
+  // On récupère donc les lignes correspondant aux
+  // autres filtres, puis on applique le seuil avant
+  // la pagination.
+  //
+  // Ce filtre est optionnel et reste réservé au
+  // cas où l'utilisateur le demande.
+  // ====================================================
+
+  if (query.lowStock) {
+    const ingredients = await prisma.rawIngredient.findMany({
       where,
 
       orderBy: [
         {
-          variant: {
-            product: {
-              name: "asc",
-            },
-          },
+          stockQty: "asc",
         },
-
         {
-          variant: {
-            sku: "asc",
-          },
+          name: "asc",
         },
       ],
 
-      skip,
+      select: {
+        id: true,
+        name: true,
+        unit: true,
+        stockQty: true,
+        minAlert: true,
+        isActive: true,
+        updatedAt: true,
+      },
+    });
+
+    const lowStockIngredients = ingredients.filter((ingredient) =>
+      ingredient.stockQty.lte(ingredient.minAlert),
+    );
+
+    const total = lowStockIngredients.length;
+
+    const start = (page - 1) * limit;
+
+    const paginated = lowStockIngredients.slice(start, start + limit);
+
+    return {
+      items: paginated.map((ingredient) => ({
+        id: ingredient.id,
+        category: "RAW_INGREDIENT" as const,
+        name: ingredient.name,
+        unit: ingredient.unit,
+        quantity: decimalToNumber(ingredient.stockQty),
+        minAlert: decimalToNumber(ingredient.minAlert),
+        isLowStock: true,
+        isActive: ingredient.isActive,
+        updatedAt: ingredient.updatedAt.toISOString(),
+      })),
+
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
+  // ====================================================
+  // PAGINATION NORMALE
+  // ====================================================
+
+  const [total, ingredients] = await Promise.all([
+    prisma.rawIngredient.count({
+      where,
+    }),
+
+    prisma.rawIngredient.findMany({
+      where,
+
+      orderBy: [
+        {
+          stockQty: "asc",
+        },
+        {
+          name: "asc",
+        },
+      ],
+
+      skip: (page - 1) * limit,
+
       take: limit,
 
-      include: {
+      select: {
+        id: true,
+        name: true,
+        unit: true,
+        stockQty: true,
+        minAlert: true,
+        isActive: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+
+  return {
+    items: ingredients.map((ingredient) => {
+      const quantity = decimalToNumber(ingredient.stockQty);
+
+      const minAlert = decimalToNumber(ingredient.minAlert);
+
+      return {
+        id: ingredient.id,
+        category: "RAW_INGREDIENT" as const,
+        name: ingredient.name,
+        unit: ingredient.unit,
+        quantity,
+        minAlert,
+        isLowStock: quantity <= minAlert,
+        isActive: ingredient.isActive,
+        updatedAt: ingredient.updatedAt.toISOString(),
+      };
+    }),
+
+    pagination: buildPagination(page, limit, total),
+  };
+};
+
+// ======================================================
+// EMBALLAGES
+// ======================================================
+
+const getPackagings = async (
+  shopId: string,
+  query: StockQueryInput,
+): Promise<{
+  items: Array<{
+    id: string;
+    category: "PACKAGING";
+    name: string;
+    size: string;
+    capacityMl: number;
+    quantity: number;
+    minAlert: number;
+    isLowStock: boolean;
+    isActive: boolean;
+    updatedAt: string;
+  }>;
+  pagination: Pagination;
+}> => {
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 20;
+  const search = normalizeSearch(query.search);
+
+  const where = {
+    shopId,
+
+    stockQty: {
+      gt: 0,
+    },
+
+    ...(search && {
+      name: {
+        contains: search,
+        mode: "insensitive" as const,
+      },
+    }),
+  };
+
+  // ====================================================
+  // LOW STOCK
+  // ====================================================
+
+  if (query.lowStock) {
+    const packagings = await prisma.packaging.findMany({
+      where,
+
+      orderBy: [
+        {
+          stockQty: "asc",
+        },
+        {
+          name: "asc",
+        },
+      ],
+
+      select: {
+        id: true,
+        name: true,
+        size: true,
+        capacityMl: true,
+        stockQty: true,
+        minAlert: true,
+        isActive: true,
+        updatedAt: true,
+      },
+    });
+
+    const lowStockPackagings = packagings.filter(
+      (packaging) => packaging.stockQty <= packaging.minAlert,
+    );
+
+    const total = lowStockPackagings.length;
+
+    const start = (page - 1) * limit;
+
+    const paginated = lowStockPackagings.slice(start, start + limit);
+
+    return {
+      items: paginated.map((packaging) => ({
+        id: packaging.id,
+        category: "PACKAGING" as const,
+        name: packaging.name,
+        size: packaging.size,
+        capacityMl: packaging.capacityMl,
+        quantity: packaging.stockQty,
+        minAlert: packaging.minAlert,
+        isLowStock: true,
+        isActive: packaging.isActive,
+        updatedAt: packaging.updatedAt.toISOString(),
+      })),
+
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
+  // ====================================================
+  // PAGINATION NORMALE
+  // ====================================================
+
+  const [total, packagings] = await Promise.all([
+    prisma.packaging.count({
+      where,
+    }),
+
+    prisma.packaging.findMany({
+      where,
+
+      orderBy: [
+        {
+          stockQty: "asc",
+        },
+        {
+          name: "asc",
+        },
+      ],
+
+      skip: (page - 1) * limit,
+
+      take: limit,
+
+      select: {
+        id: true,
+        name: true,
+        size: true,
+        capacityMl: true,
+        stockQty: true,
+        minAlert: true,
+        isActive: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+
+  return {
+    items: packagings.map((packaging) => ({
+      id: packaging.id,
+      category: "PACKAGING" as const,
+      name: packaging.name,
+      size: packaging.size,
+      capacityMl: packaging.capacityMl,
+      quantity: packaging.stockQty,
+      minAlert: packaging.minAlert,
+      isLowStock: packaging.stockQty <= packaging.minAlert,
+      isActive: packaging.isActive,
+      updatedAt: packaging.updatedAt.toISOString(),
+    })),
+
+    pagination: buildPagination(page, limit, total),
+  };
+};
+
+// ======================================================
+// PRODUITS FINIS
+// ======================================================
+
+const getFinishedProducts = async (
+  shopId: string,
+  pointOfSaleId: string | null,
+  query: StockQueryInput,
+): Promise<{
+  items: Array<{
+    id: string;
+    category: "FINISHED_PRODUCT";
+    variantId: string;
+    productId: string;
+    sku: string;
+    name: string;
+    image: string | null;
+    quantity: number;
+    price: number;
+    shelfLifeDays: number;
+    packaging: {
+      id: string;
+      name: string;
+      size: string;
+      capacityMl: number;
+    };
+    isActive: boolean;
+    updatedAt: string;
+  }>;
+  pagination: Pagination;
+}> => {
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 20;
+  const search = normalizeSearch(query.search);
+
+  const where = {
+    shopId,
+    pointOfSaleId,
+
+    quantity: {
+      gt: 0,
+    },
+
+    variant: {
+      isActive: true,
+
+      product: {
+        isActive: true,
+
+        ...(search && {
+          name: {
+            contains: search,
+            mode: "insensitive" as const,
+          },
+        }),
+      },
+    },
+  };
+
+  const [total, stocks] = await Promise.all([
+    prisma.finishedStock.count({
+      where,
+    }),
+
+    prisma.finishedStock.findMany({
+      where,
+
+      orderBy: {
+        updatedAt: "desc",
+      },
+
+      skip: (page - 1) * limit,
+
+      take: limit,
+
+      select: {
+        id: true,
+        quantity: true,
+        updatedAt: true,
+
         variant: {
-          include: {
+          select: {
+            id: true,
+            sku: true,
+            price: true,
+            shelfLifeDays: true,
+
             product: {
               select: {
                 id: true,
                 name: true,
                 image: true,
-                isActive: true,
               },
             },
 
@@ -529,319 +746,355 @@ async function getFinishedStocks(
             },
           },
         },
-
-        lots: {
-          where: {
-            remainingQuantity: {
-              gt: 0,
-            },
-          },
-
-          orderBy: [
-            {
-              expiresAt: "asc",
-            },
-
-            {
-              createdAt: "asc",
-            },
-          ],
-
-          select: {
-            id: true,
-            quantity: true,
-            remainingQuantity: true,
-            expiresAt: true,
-            createdAt: true,
-          },
-        },
       },
-    }),
-
-    prisma.finishedStock.count({
-      where,
     }),
   ]);
 
-  const now = new Date();
+  return {
+    items: stocks.map((stock) => ({
+      id: stock.id,
+      category: "FINISHED_PRODUCT" as const,
 
-  const stocks = finishedStocks.map((stock) => {
-    const activeLots = stock.lots.filter((lot) => lot.remainingQuantity > 0);
+      variantId: stock.variant.id,
 
-    const expiredQuantity = activeLots.reduce((total, lot) => {
-      if (lot.expiresAt && lot.expiresAt < now) {
-        return total + lot.remainingQuantity;
-      }
+      productId: stock.variant.product.id,
 
-      return total;
-    }, 0);
+      sku: stock.variant.sku,
 
-    const nextExpiration =
-      activeLots.find((lot) => lot.expiresAt !== null)?.expiresAt ?? null;
+      name: stock.variant.product.name,
 
-    return {
-      ...stock,
+      image: stock.variant.product.image,
 
-      expiredQuantity,
+      quantity: stock.quantity,
 
-      nextExpiration,
+      price: decimalToNumber(stock.variant.price),
 
-      hasExpiredStock: expiredQuantity > 0,
+      shelfLifeDays: stock.variant.shelfLifeDays,
 
-      isOutOfStock: stock.quantity === 0,
-    };
-  });
+      packaging: {
+        id: stock.variant.packaging.id,
+
+        name: stock.variant.packaging.name,
+
+        size: stock.variant.packaging.size,
+
+        capacityMl: stock.variant.packaging.capacityMl,
+      },
+
+      isActive: true,
+
+      updatedAt: stock.updatedAt.toISOString(),
+    })),
+
+    pagination: buildPagination(page, limit, total),
+  };
+};
+
+// ======================================================
+// RÉSUMÉ GLOBAL DU STOCK
+// ======================================================
+
+const getStockSummary = async (
+  shopId: string,
+  pointOfSaleId: string | null,
+) => {
+  const [rawIngredients, packagings, finishedProducts] = await Promise.all([
+    prisma.rawIngredient.findMany({
+      where: {
+        shopId,
+        stockQty: {
+          gt: 0,
+        },
+      },
+
+      select: {
+        stockQty: true,
+        minAlert: true,
+      },
+    }),
+
+    prisma.packaging.findMany({
+      where: {
+        shopId,
+        stockQty: {
+          gt: 0,
+        },
+      },
+
+      select: {
+        stockQty: true,
+        minAlert: true,
+      },
+    }),
+
+    prisma.finishedStock.findMany({
+      where: {
+        shopId,
+        pointOfSaleId,
+        quantity: {
+          gt: 0,
+        },
+      },
+
+      select: {
+        quantity: true,
+      },
+    }),
+  ]);
 
   return {
-    stocks,
+    rawIngredients: rawIngredients.length,
 
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-    },
+    packagings: packagings.length,
+
+    finishedProducts: finishedProducts.length,
+
+    lowStockRawIngredients: rawIngredients.filter((item) =>
+      item.stockQty.lte(item.minAlert),
+    ).length,
+
+    lowStockPackagings: packagings.filter(
+      (item) => item.stockQty <= item.minAlert,
+    ).length,
+
+    finishedProductQuantity: finishedProducts.reduce(
+      (total, item) => total + item.quantity,
+      0,
+    ),
   };
-}
-
-// ======================================================
-// MATIÈRES PREMIÈRES
-// ======================================================
-//
-// UNIQUEMENT POUR LE MANAGER.
-//
-// ======================================================
-
-async function getRawIngredients(shopId: string) {
-  const ingredients = await prisma.rawIngredient.findMany({
-    where: {
-      shopId,
-    },
-
-    orderBy: {
-      name: "asc",
-    },
-  });
-
-  return ingredients.map((ingredient) => {
-    const stockQty = decimalToNumber(ingredient.stockQty);
-
-    const minAlert = decimalToNumber(ingredient.minAlert);
-
-    return {
-      ...ingredient,
-      stockQty,
-      minAlert,
-      isOutOfStock: stockQty <= 0,
-      isLowStock: stockQty > 0 && stockQty <= minAlert,
-    };
-  });
-}
-
-// ======================================================
-// EMBALLAGES
-// ======================================================
-//
-// UNIQUEMENT POUR LE MANAGER.
-//
-// ======================================================
-
-async function getPackagings(shopId: string) {
-  const packagings = await prisma.packaging.findMany({
-    where: {
-      shopId,
-    },
-
-    orderBy: [
-      {
-        name: "asc",
-      },
-
-      {
-        capacityMl: "asc",
-      },
-    ],
-  });
-
-  return packagings.map((packaging) => ({
-    ...packaging,
-    isOutOfStock: packaging.stockQty <= 0,
-    isLowStock:
-      packaging.stockQty > 0 && packaging.stockQty <= packaging.minAlert,
-  }));
-}
+};
 
 // ======================================================
 // STOCK GLOBAL
 // ======================================================
-//
-// MANAGER
-// → matières premières
-// → packaging
-// → stock central OU PDV choisi
-//
-// EMPLOYEE
-// → uniquement les jus finis
-// → uniquement son PDV
-//
-// ======================================================
 
-export async function getStock(
-  userId: string,
-  query: Partial<StockQueryInput> = {},
-) {
-  const shop = await getMainShop();
+export const getStock = async (userId: string, query: StockQueryInput) => {
+  const requestedLocation = query.locationType
+    ? {
+        locationType: query.locationType,
+        pointOfSaleId: query.pointOfSaleId,
+      }
+    : undefined;
 
-  const requestedPointOfSaleId = normalizePointOfSaleId(query.pointOfSaleId);
-
-  // ====================================================
-  // ACCÈS
-  // ====================================================
-
-  const access = await validateStockAccess(
+  const { shop, stockLocation } = await resolveStockLocation(
     userId,
-    shop.id,
-    requestedPointOfSaleId,
+    requestedLocation,
   );
 
-  const limit = query.limit ?? 20;
+  const category = query.category;
 
-  const page = query.page ?? 1;
+  const summary = await getStockSummary(shop.id, stockLocation.pointOfSaleId);
 
   // ====================================================
-  // EMPLOYEE
-  // ====================================================
-  //
-  // Un employee ne consulte que :
-  //
-  // FinishedStock de son PDV.
-  //
-  // On ne récupère volontairement PAS :
-  //
-  // - RawIngredient
-  // - Packaging
-  // - stock central
-  // - autre PDV
-  //
+  // MATIÈRES PREMIÈRES
   // ====================================================
 
-  if (access.user.role === "EMPLOYEE") {
-    const finishedStocks = await getFinishedStocks(
-      shop.id,
-      access.pointOfSaleId!,
-      limit,
-      page,
-    );
+  if (category === "RAW_INGREDIENT") {
+    if (stockLocation.type !== "MAIN") {
+      throw new StockServiceError(
+        "INVALID_CATEGORY",
+        "Les matières premières sont uniquement disponibles dans le stock principal.",
+      );
+    }
+
+    const result = await getRawIngredients(shop.id, query);
 
     return {
-      shop: {
-        id: shop.id,
-        name: shop.name,
-        currency: shop.currency,
-      },
-
       location: {
-        type: "POS" as const,
-        pointOfSaleId: access.pointOfSaleId,
-        pointOfSale: access.pointOfSale,
+        type: stockLocation.type,
+        pointOfSaleId: stockLocation.pointOfSaleId,
+        pointOfSaleName: stockLocation.pointOfSaleName,
       },
 
-      rawIngredients: [],
+      category,
 
-      packagings: [],
+      items: result.items,
 
-      finishedStocks: finishedStocks.stocks,
+      pagination: result.pagination,
 
-      pagination: finishedStocks.pagination,
+      summary,
     };
   }
 
   // ====================================================
-  // MANAGER
+  // EMBALLAGES
   // ====================================================
 
-  const pointOfSale = access.pointOfSale;
+  if (category === "PACKAGING") {
+    if (stockLocation.type !== "MAIN") {
+      throw new StockServiceError(
+        "INVALID_CATEGORY",
+        "Les emballages sont uniquement disponibles dans le stock principal.",
+      );
+    }
 
-  const [rawIngredients, packagings, finishedStocks] = await Promise.all([
-    getRawIngredients(shop.id),
+    const result = await getPackagings(shop.id, query);
 
-    getPackagings(shop.id),
+    return {
+      location: {
+        type: stockLocation.type,
+        pointOfSaleId: stockLocation.pointOfSaleId,
+        pointOfSaleName: stockLocation.pointOfSaleName,
+      },
 
-    getFinishedStocks(shop.id, access.pointOfSaleId!, limit, page),
-  ]);
+      category,
 
-  // ====================================================
-  // RÉPONSE MANAGER
-  // ====================================================
+      items: result.items,
 
-  return {
-    shop: {
-      id: shop.id,
-      name: shop.name,
-      currency: shop.currency,
-    },
+      pagination: result.pagination,
 
-    location: {
-      type: "POS" as const,
-      pointOfSaleId: access.pointOfSaleId,
-      pointOfSale,
-    },
-
-    rawIngredients,
-
-    packagings,
-
-    finishedStocks: finishedStocks.stocks,
-
-    pagination: finishedStocks.pagination,
-  };
-}
-
-// ======================================================
-// DÉTAIL STOCK D'UNE VARIANTE
-// ======================================================
-//
-// MANAGER
-// → peut demander central ou un PDV.
-//
-// EMPLOYEE
-// → le serveur impose son PDV.
-//
-// ======================================================
-
-export async function getStockByVariant(
-  userId: string,
-  variantId: string,
-  query: Partial<StockVariantQueryInput> = {},
-) {
-  const shop = await getMainShop();
-
-  const requestedPointOfSaleId = normalizePointOfSaleId(query.pointOfSaleId);
+      summary,
+    };
+  }
 
   // ====================================================
-  // ACCÈS
+  // PRODUITS FINIS
   // ====================================================
 
-  const access = await validateStockAccess(
-    userId,
+  if (category === "FINISHED_PRODUCT") {
+    const result = await getFinishedProducts(
+      shop.id,
+      stockLocation.pointOfSaleId,
+      query,
+    );
+
+    return {
+      location: {
+        type: stockLocation.type,
+        pointOfSaleId: stockLocation.pointOfSaleId,
+        pointOfSaleName: stockLocation.pointOfSaleName,
+      },
+
+      category,
+
+      items: result.items,
+
+      pagination: result.pagination,
+
+      summary,
+    };
+  }
+
+  // ====================================================
+  // AUCUNE CATÉGORIE
+  // ====================================================
+  //
+  // On retourne la première page de chaque
+  // catégorie.
+  //
+  // Le frontend peut ensuite demander :
+  //
+  // category=RAW_INGREDIENT
+  // category=PACKAGING
+  // category=FINISHED_PRODUCT
+  //
+  // pour continuer le scroll de chaque liste.
+  // ====================================================
+
+  const rawIngredients =
+    stockLocation.type === "MAIN"
+      ? await getRawIngredients(shop.id, query)
+      : {
+          items: [],
+          pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
+        };
+
+  const packagings =
+    stockLocation.type === "MAIN"
+      ? await getPackagings(shop.id, query)
+      : {
+          items: [],
+          pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
+        };
+
+  const finishedProducts = await getFinishedProducts(
     shop.id,
-    requestedPointOfSaleId,
+    stockLocation.pointOfSaleId,
+    query,
   );
 
-  // ====================================================
-  // VARIANTE
-  // ====================================================
+  return {
+    location: {
+      type: stockLocation.type,
+      pointOfSaleId: stockLocation.pointOfSaleId,
+      pointOfSaleName: stockLocation.pointOfSaleName,
+    },
 
-  const variant = await getVariantForShop(shop.id, variantId);
+    categories: {
+      rawIngredients: {
+        items: rawIngredients.items,
+        pagination: rawIngredients.pagination,
+      },
 
-  // ====================================================
-  // STOCK
-  // ====================================================
+      packagings: {
+        items: packagings.items,
+        pagination: packagings.pagination,
+      },
+
+      finishedProducts: {
+        items: finishedProducts.items,
+        pagination: finishedProducts.pagination,
+      },
+    },
+
+    summary,
+  };
+};
+
+// ======================================================
+// DÉTAIL D'UNE VARIANTE
+// ======================================================
+
+export const getStockProduct = async (
+  userId: string,
+  variantId: string,
+  location?: StockLocationInput,
+) => {
+  const { shop, stockLocation } = await resolveStockLocation(userId, location);
 
   const finishedStock = await prisma.finishedStock.findFirst({
-    where: getFinishedStockWhere(shop.id, variantId, access.pointOfSaleId),
+    where: {
+      shopId: shop.id,
 
-    include: {
+      pointOfSaleId: stockLocation.pointOfSaleId,
+
+      variantId,
+    },
+
+    select: {
+      id: true,
+      quantity: true,
+      updatedAt: true,
+
+      variant: {
+        select: {
+          id: true,
+          sku: true,
+          price: true,
+          shelfLifeDays: true,
+          isActive: true,
+
+          product: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              image: true,
+              isActive: true,
+            },
+          },
+
+          packaging: {
+            select: {
+              id: true,
+              name: true,
+              size: true,
+              capacityMl: true,
+            },
+          },
+        },
+      },
+
       lots: {
         where: {
           remainingQuantity: {
@@ -853,22 +1106,43 @@ export async function getStockByVariant(
           {
             expiresAt: "asc",
           },
-
           {
             createdAt: "asc",
           },
         ],
 
-        include: {
+        select: {
+          id: true,
+          quantity: true,
+          remainingQuantity: true,
+          expiresAt: true,
+          createdAt: true,
+          updatedAt: true,
+
           entry: {
             select: {
               id: true,
               quantity: true,
               origin: true,
               note: true,
-              createdById: true,
               createdAt: true,
-              productionItemId: true,
+
+              productionItem: {
+                select: {
+                  id: true,
+                  productionId: true,
+                  quantityProduced: true,
+                  remainingQuantity: true,
+                  expiresAt: true,
+                },
+              },
+
+              createdBy: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
             },
           },
         },
@@ -879,36 +1153,29 @@ export async function getStockByVariant(
           createdAt: "desc",
         },
 
-        include: {
+        take: 20,
+
+        select: {
+          id: true,
+          quantity: true,
+          origin: true,
+          note: true,
+          createdAt: true,
+
+          productionItem: {
+            select: {
+              id: true,
+              productionId: true,
+              quantityProduced: true,
+              remainingQuantity: true,
+              expiresAt: true,
+            },
+          },
+
           createdBy: {
             select: {
               id: true,
               name: true,
-              telephone: true,
-            },
-          },
-
-          productionItem: {
-            include: {
-              production: {
-                select: {
-                  id: true,
-                  producedAt: true,
-                  totalVolumeMl: true,
-                  notes: true,
-                  managerId: true,
-                },
-              },
-            },
-          },
-
-          lots: {
-            select: {
-              id: true,
-              quantity: true,
-              remainingQuantity: true,
-              expiresAt: true,
-              createdAt: true,
             },
           },
         },
@@ -916,427 +1183,130 @@ export async function getStockByVariant(
     },
   });
 
-  const now = new Date();
-
-  // ====================================================
-  // STOCK ABSENT
-  // ====================================================
-
   if (!finishedStock) {
-    return {
-      shop: {
-        id: shop.id,
-        name: shop.name,
-        currency: shop.currency,
-      },
-
-      location: {
-        type: "POS" as const,
-        pointOfSaleId: access.pointOfSaleId,
-        pointOfSale: access.pointOfSale,
-      },
-
-      variant,
-
-      stock: {
-        id: null,
-        quantity: 0,
-        isOutOfStock: true,
-        expiredQuantity: 0,
-        hasExpiredStock: false,
-        nextExpiration: null,
-        lots: [],
-        entries: [],
-      },
-    };
-  }
-
-  // ====================================================
-  // COHÉRENCE
-  // ====================================================
-
-  const lotsRemaining = finishedStock.lots.reduce(
-    (total, lot) => total + lot.remainingQuantity,
-    0,
-  );
-
-  if (lotsRemaining !== finishedStock.quantity) {
     throw new StockServiceError(
-      "STOCK_INCONSISTENCY",
-      "Le stock agrégé ne correspond pas à la quantité restante des lots.",
+      "STOCK_PRODUCT_NOT_FOUND",
+      "Ce produit n'existe pas dans cet emplacement de stock.",
     );
   }
 
-  // ====================================================
-  // EXPIRATION
-  // ====================================================
-
-  const activeLots = finishedStock.lots;
-
-  const expiredQuantity = activeLots.reduce((total, lot) => {
-    if (lot.expiresAt && lot.expiresAt < now) {
-      return total + lot.remainingQuantity;
-    }
-
-    return total;
-  }, 0);
-
-  const nextExpiration =
-    activeLots.find((lot) => lot.expiresAt !== null)?.expiresAt ?? null;
-
-  // ====================================================
-  // RÉPONSE
-  // ====================================================
-
   return {
-    shop: {
-      id: shop.id,
-      name: shop.name,
-      currency: shop.currency,
-    },
-
     location: {
-      type: "POS" as const,
-      pointOfSaleId: access.pointOfSaleId,
-      pointOfSale: access.pointOfSale,
+      type: stockLocation.type,
+      pointOfSaleId: stockLocation.pointOfSaleId,
+      pointOfSaleName: stockLocation.pointOfSaleName,
     },
-
-    variant,
 
     stock: {
       id: finishedStock.id,
       quantity: finishedStock.quantity,
-      isOutOfStock: finishedStock.quantity === 0,
-      expiredQuantity,
-      hasExpiredStock: expiredQuantity > 0,
-      nextExpiration,
-      lots: finishedStock.lots,
-      entries: finishedStock.entries,
+      updatedAt: finishedStock.updatedAt.toISOString(),
     },
+
+    product: {
+      variantId: finishedStock.variant.id,
+
+      productId: finishedStock.variant.product.id,
+
+      sku: finishedStock.variant.sku,
+
+      name: finishedStock.variant.product.name,
+
+      description: finishedStock.variant.product.description,
+
+      image: finishedStock.variant.product.image,
+
+      price: decimalToNumber(finishedStock.variant.price),
+
+      shelfLifeDays: finishedStock.variant.shelfLifeDays,
+
+      isActive:
+        finishedStock.variant.isActive &&
+        finishedStock.variant.product.isActive,
+
+      packaging: {
+        id: finishedStock.variant.packaging.id,
+
+        name: finishedStock.variant.packaging.name,
+
+        size: finishedStock.variant.packaging.size,
+
+        capacityMl: finishedStock.variant.packaging.capacityMl,
+      },
+    },
+
+    lots: finishedStock.lots.map((lot) => ({
+      id: lot.id,
+      quantity: lot.quantity,
+      remainingQuantity: lot.remainingQuantity,
+
+      expiresAt: lot.expiresAt?.toISOString() ?? null,
+
+      createdAt: lot.createdAt.toISOString(),
+
+      updatedAt: lot.updatedAt.toISOString(),
+
+      entry: {
+        id: lot.entry.id,
+        quantity: lot.entry.quantity,
+
+        origin: lot.entry.origin,
+
+        note: lot.entry.note,
+
+        createdAt: lot.entry.createdAt.toISOString(),
+
+        productionItem: lot.entry.productionItem
+          ? {
+              id: lot.entry.productionItem.id,
+
+              productionId: lot.entry.productionItem.productionId,
+
+              quantityProduced: lot.entry.productionItem.quantityProduced,
+
+              remainingQuantity: lot.entry.productionItem.remainingQuantity,
+
+              expiresAt: lot.entry.productionItem.expiresAt.toISOString(),
+            }
+          : null,
+
+        createdBy: {
+          id: lot.entry.createdBy.id,
+
+          name: lot.entry.createdBy.name,
+        },
+      },
+    })),
+
+    entries: finishedStock.entries.map((entry) => ({
+      id: entry.id,
+      quantity: entry.quantity,
+
+      origin: entry.origin,
+
+      note: entry.note,
+
+      createdAt: entry.createdAt.toISOString(),
+
+      productionItem: entry.productionItem
+        ? {
+            id: entry.productionItem.id,
+
+            productionId: entry.productionItem.productionId,
+
+            quantityProduced: entry.productionItem.quantityProduced,
+
+            remainingQuantity: entry.productionItem.remainingQuantity,
+
+            expiresAt: entry.productionItem.expiresAt.toISOString(),
+          }
+        : null,
+
+      createdBy: {
+        id: entry.createdBy.id,
+
+        name: entry.createdBy.name,
+      },
+    })),
   };
-}
-
-// ======================================================
-// AJUSTEMENT — RÉDUIRE LES LOTS
-// ======================================================
-
-async function consumeLotsForAdjustment(
-  tx: Prisma.TransactionClient,
-  finishedStockId: string,
-  quantityToRemove: number,
-) {
-  let remaining = quantityToRemove;
-
-  const lots = await tx.finishedStockLot.findMany({
-    where: {
-      finishedStockId,
-      remainingQuantity: {
-        gt: 0,
-      },
-    },
-
-    orderBy: [
-      {
-        expiresAt: "asc",
-      },
-
-      {
-        createdAt: "asc",
-      },
-    ],
-  });
-
-  for (const lot of lots) {
-    if (remaining <= 0) {
-      break;
-    }
-
-    const quantityFromLot = Math.min(lot.remainingQuantity, remaining);
-
-    await tx.finishedStockLot.update({
-      where: {
-        id: lot.id,
-      },
-
-      data: {
-        remainingQuantity: {
-          decrement: quantityFromLot,
-        },
-      },
-    });
-
-    remaining -= quantityFromLot;
-  }
-
-  if (remaining > 0) {
-    throw new StockServiceError(
-      "INSUFFICIENT_LOT_STOCK",
-      "La quantité à retirer dépasse la quantité disponible dans les lots.",
-    );
-  }
-}
-
-// ======================================================
-// AJUSTEMENT D'INVENTAIRE
-// ======================================================
-//
-// MANAGER UNIQUEMENT.
-//
-// L'employee ne peut jamais atteindre cette opération.
-//
-// ======================================================
-
-export async function adjustStock(userId: string, input: StockAdjustmentInput) {
-  // ====================================================
-  // MANAGER
-  // ====================================================
-
-  const manager = await validateManager(userId);
-
-  // ====================================================
-  // SHOP
-  // ====================================================
-
-  const shop = await getMainShop();
-
-  // ====================================================
-  // LOCALISATION
-  // ====================================================
-
-  const pointOfSaleId = normalizePointOfSaleId(input.pointOfSaleId);
-
-  if (pointOfSaleId) {
-    await validatePointOfSale(shop.id, pointOfSaleId);
-  }
-
-  // ====================================================
-  // VARIANTE
-  // ====================================================
-
-  const variant = await getVariantForShop(shop.id, input.variantId);
-
-  if (!variant.isActive) {
-    throw new StockServiceError(
-      "VARIANT_INACTIVE",
-      `La variante "${variant.sku}" est désactivée.`,
-    );
-  }
-
-  if (!variant.product.isActive) {
-    throw new StockServiceError(
-      "PRODUCT_INACTIVE",
-      `Le produit "${variant.product.name}" est désactivé.`,
-    );
-  }
-
-  // ====================================================
-  // TRANSACTION ATOMIQUE
-  // ====================================================
-
-  const result = await prisma.$transaction(
-    async (tx) => {
-      // ==============================================
-      // 1. RÉCUPÉRER LE STOCK
-      // ==============================================
-
-      let finishedStock = await tx.finishedStock.findFirst({
-        where: getFinishedStockWhere(shop.id, input.variantId, pointOfSaleId),
-      });
-
-      // ==============================================
-      // 2. STOCK INEXISTANT
-      // ==============================================
-
-      if (!finishedStock) {
-        if (input.actualQuantity === 0) {
-          throw new StockServiceError(
-            "NO_ADJUSTMENT_NEEDED",
-            "Le stock est déjà à zéro.",
-          );
-        }
-
-        finishedStock = await tx.finishedStock.create({
-          data: {
-            shopId: shop.id,
-            pointOfSaleId,
-            variantId: input.variantId,
-            quantity: input.actualQuantity,
-          },
-        });
-
-        const entry = await tx.finishedStockEntry.create({
-          data: {
-            finishedStockId: finishedStock.id,
-            quantity: input.actualQuantity,
-            origin: "AJUSTEMENT",
-            note: input.note?.trim() || null,
-            createdById: manager.id,
-          },
-        });
-
-        await tx.finishedStockLot.create({
-          data: {
-            finishedStockId: finishedStock.id,
-            entryId: entry.id,
-            quantity: input.actualQuantity,
-            remainingQuantity: input.actualQuantity,
-            expiresAt: null,
-          },
-        });
-
-        return {
-          finishedStockId: finishedStock.id,
-          previousQuantity: 0,
-          actualQuantity: input.actualQuantity,
-          difference: input.actualQuantity,
-          entryId: entry.id,
-        };
-      }
-
-      // ==============================================
-      // 3. COHÉRENCE
-      // ==============================================
-
-      await validateFinishedStockConsistency(tx, finishedStock);
-
-      // ==============================================
-      // 4. DIFFÉRENCE
-      // ==============================================
-
-      const previousQuantity = finishedStock.quantity;
-      const difference = input.actualQuantity - previousQuantity;
-
-      // ==============================================
-      // 5. AUCUN CHANGEMENT
-      // ==============================================
-
-      if (difference === 0) {
-        throw new StockServiceError(
-          "NO_ADJUSTMENT_NEEDED",
-          "La quantité réelle correspond déjà au stock enregistré.",
-        );
-      }
-
-      // ==============================================
-      // 6. DIMINUTION
-      // ==============================================
-
-      if (difference < 0) {
-        await consumeLotsForAdjustment(
-          tx,
-          finishedStock.id,
-          Math.abs(difference),
-        );
-      }
-
-      // ==============================================
-      // 7. MISE À JOUR STOCK
-      // ==============================================
-
-      const updated = await tx.finishedStock.updateMany({
-        where: {
-          id: finishedStock.id,
-          quantity: previousQuantity,
-        },
-
-        data: {
-          quantity: input.actualQuantity,
-        },
-      });
-
-      if (updated.count !== 1) {
-        throw new StockServiceError(
-          "STOCK_CONCURRENT_UPDATE",
-          "Le stock a été modifié par une autre opération. Veuillez actualiser puis réessayer.",
-        );
-      }
-
-      // ==============================================
-      // 8. ENTRÉE AJUSTEMENT
-      // ==============================================
-
-      const entry = await tx.finishedStockEntry.create({
-        data: {
-          finishedStockId: finishedStock.id,
-          quantity: difference,
-          origin: "AJUSTEMENT",
-          note: input.note?.trim() || null,
-          createdById: manager.id,
-        },
-      });
-
-      // ==============================================
-      // 9. LOT POUR AUGMENTATION
-      // ==============================================
-
-      if (difference > 0) {
-        await tx.finishedStockLot.create({
-          data: {
-            finishedStockId: finishedStock.id,
-            entryId: entry.id,
-            quantity: difference,
-            remainingQuantity: difference,
-            expiresAt: null,
-          },
-        });
-      }
-
-      // ==============================================
-      // 10. VÉRIFICATION FINALE
-      // ==============================================
-
-      const finalStock = await tx.finishedStock.findUnique({
-        where: {
-          id: finishedStock.id,
-        },
-      });
-
-      if (!finalStock) {
-        throw new StockServiceError(
-          "STOCK_NOT_FOUND",
-          "Le stock après ajustement est introuvable.",
-        );
-      }
-
-      await validateFinishedStockConsistency(tx, finalStock);
-
-      // ==============================================
-      // 11. RÉSULTAT DE L'AJUSTEMENT
-      // ==============================================
-
-      return {
-        finishedStockId: finishedStock.id,
-        previousQuantity,
-        actualQuantity: input.actualQuantity,
-        difference,
-        entryId: entry.id,
-      };
-    },
-    {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-    },
-  );
-
-  // ====================================================
-  // STOCK MIS À JOUR
-  // ====================================================
-
-  const updatedStock = await getStockByVariant(manager.id, input.variantId, {
-    pointOfSaleId: pointOfSaleId ?? undefined,
-  });
-
-  // ====================================================
-  // RÉSULTAT FINAL
-  // ====================================================
-
-  return {
-    ...updatedStock,
-    adjustment: {
-      finishedStockId: result.finishedStockId,
-      previousQuantity: result.previousQuantity,
-      actualQuantity: result.actualQuantity,
-      difference: result.difference,
-      entryId: result.entryId,
-    },
-  };
-}
+};
