@@ -15,13 +15,11 @@ async function getUserShopId(userId: string) {
       role: true,
       isActive: true,
       isBanned: true,
-
       shopOwner: {
         select: {
           id: true,
         },
       },
-
       assignments: {
         where: {
           isActive: true,
@@ -32,6 +30,17 @@ async function getUserShopId(userId: string) {
         take: 1,
       },
     },
+  });
+
+  console.log("=== DISTRIBUTION USER DEBUG ===");
+  console.log({
+    userId,
+    userFound: !!user,
+    role: user?.role,
+    isActive: user?.isActive,
+    isBanned: user?.isBanned,
+    shopOwnerId: user?.shopOwner?.id ?? null,
+    assignmentShopId: user?.assignments[0]?.shopId ?? null,
   });
 
   if (!user) {
@@ -52,8 +61,18 @@ async function getUserShopId(userId: string) {
 
   if (user.role === "MANAGER") {
     if (!user.shopOwner?.id) {
+      console.log("=== DISTRIBUTION SHOP ERROR ===");
+      console.log("MANAGER sans boutique propriétaire");
+
       throw new Error("SHOP_NOT_FOUND");
     }
+
+    console.log("=== DISTRIBUTION SHOP DEBUG ===");
+    console.log({
+      role: "MANAGER",
+      shopId: user.shopOwner.id,
+      source: "shopOwner",
+    });
 
     return user.shopOwner.id;
   }
@@ -65,8 +84,18 @@ async function getUserShopId(userId: string) {
   const shopId = user.assignments[0]?.shopId;
 
   if (!shopId) {
+    console.log("=== DISTRIBUTION SHOP ERROR ===");
+    console.log("EMPLOYEE sans assignment active");
+
     throw new Error("SHOP_NOT_FOUND");
   }
+
+  console.log("=== DISTRIBUTION SHOP DEBUG ===");
+  console.log({
+    role: "EMPLOYEE",
+    shopId,
+    source: "assignment",
+  });
 
   return shopId;
 }
@@ -79,11 +108,29 @@ export async function getDistributionProducts(
   userId: string,
   fromPosId: string | null,
 ) {
+  console.log("\n==================================================");
+  console.log("        DISTRIBUTION PRODUCTS - START");
+  console.log("==================================================");
+
+  console.log("=== DISTRIBUTION REQUEST DEBUG ===");
+  console.log({
+    userId,
+    fromPosId,
+    fromPosIdType: typeof fromPosId,
+  });
+
   // ====================================================
   // 1. RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
   // ====================================================
 
   const shopId = await getUserShopId(userId);
+
+  console.log("=== DISTRIBUTION SHOP RESOLVED ===");
+  console.log({
+    userId,
+    shopId,
+    fromPosId,
+  });
 
   // ====================================================
   // 2. VÉRIFIER LE POINT DE DÉPART
@@ -93,6 +140,13 @@ export async function getDistributionProducts(
   // ====================================================
 
   if (fromPosId !== null) {
+    console.log("=== DISTRIBUTION POS SEARCH ===");
+    console.log({
+      requestedPosId: fromPosId,
+      expectedShopId: shopId,
+      requireActive: true,
+    });
+
     const pointOfSale = await prisma.pointOfSale.findFirst({
       where: {
         id: fromPosId,
@@ -101,14 +155,38 @@ export async function getDistributionProducts(
       },
       select: {
         id: true,
+        shopId: true,
         name: true,
         code: true,
+        isActive: true,
       },
     });
 
+    console.log("=== DISTRIBUTION POS RESULT ===");
+    console.log(pointOfSale);
+
     if (!pointOfSale) {
+      console.log("=== DISTRIBUTION POS ERROR ===");
+      console.log({
+        message: "Aucun POS actif correspondant",
+        requestedPosId: fromPosId,
+        expectedShopId: shopId,
+      });
+
       throw new Error("POINT_OF_SALE_NOT_FOUND");
     }
+
+    console.log("=== DISTRIBUTION POS VALID ===");
+    console.log({
+      id: pointOfSale.id,
+      shopId: pointOfSale.shopId,
+      name: pointOfSale.name,
+      code: pointOfSale.code,
+      isActive: pointOfSale.isActive,
+    });
+  } else {
+    console.log("=== DISTRIBUTION SOURCE ===");
+    console.log("Source = BOUTIQUE PRINCIPALE");
   }
 
   // ====================================================
@@ -117,6 +195,13 @@ export async function getDistributionProducts(
   // pointOfSaleId = null → boutique principale
   // pointOfSaleId = id   → point de vente
   // ====================================================
+
+  console.log("=== DISTRIBUTION STOCK SEARCH ===");
+  console.log({
+    shopId,
+    pointOfSaleId: fromPosId,
+    quantityCondition: "> 0",
+  });
 
   const stocks = await prisma.finishedStock.findMany({
     where: {
@@ -132,18 +217,15 @@ export async function getDistributionProducts(
         },
       },
     },
-
     select: {
       variantId: true,
       quantity: true,
-
       variant: {
         select: {
           id: true,
           sku: true,
           price: true,
           shelfLifeDays: true,
-
           product: {
             select: {
               id: true,
@@ -151,7 +233,6 @@ export async function getDistributionProducts(
               image: true,
             },
           },
-
           packaging: {
             select: {
               id: true,
@@ -163,20 +244,46 @@ export async function getDistributionProducts(
         },
       },
     },
-
     orderBy: {
       updatedAt: "desc",
     },
   });
 
   // ====================================================
+  // DEBUG STOCK
+  // ====================================================
+
+  console.log("=== DISTRIBUTION STOCK RESULT ===");
+
+  console.log({
+    shopId,
+    pointOfSaleId: fromPosId,
+    stockCount: stocks.length,
+  });
+
+  console.log("=== DISTRIBUTION STOCK DETAILS ===");
+
+  console.log(
+    stocks.map((stock) => ({
+      variantId: stock.variantId,
+      quantity: stock.quantity,
+      sku: stock.variant.sku,
+      productId: stock.variant.product.id,
+      productName: stock.variant.product.name,
+      packagingId: stock.variant.packaging.id,
+      packagingName: stock.variant.packaging.name,
+      capacityMl: stock.variant.packaging.capacityMl,
+      isActive: true,
+    })),
+  );
+
+  // ====================================================
   // 4. FORMATER POUR LA DISTRIBUTION
   // ====================================================
 
-  return {
+  const result = {
     location: {
       type: fromPosId === null ? "MAIN" : "POS",
-
       pointOfSaleId: fromPosId,
     },
 
@@ -208,6 +315,29 @@ export async function getDistributionProducts(
       isActive: true,
     })),
   };
+
+  // ====================================================
+  // DEBUG FINAL
+  // ====================================================
+
+  console.log("=== DISTRIBUTION PRODUCTS RESULT ===");
+
+  console.log({
+    location: result.location,
+    productCount: result.products.length,
+    products: result.products.map((product) => ({
+      variantId: product.variantId,
+      productName: product.productName,
+      sku: product.sku,
+      quantity: product.quantity,
+    })),
+  });
+
+  console.log("==================================================");
+  console.log("        DISTRIBUTION PRODUCTS - END");
+  console.log("==================================================\n");
+
+  return result;
 }
 
 // ======================================================
@@ -227,18 +357,15 @@ export async function createDistribution(
       where: {
         id: createdById,
       },
-
       select: {
         role: true,
         isActive: true,
         isBanned: true,
-
         shopOwner: {
           select: {
             id: true,
           },
         },
-
         assignments: {
           where: {
             isActive: true,
@@ -294,7 +421,6 @@ export async function createDistribution(
           shopId,
           isActive: true,
         },
-
         select: {
           id: true,
           name: true,
@@ -317,7 +443,6 @@ export async function createDistribution(
         fromPosId: input.fromPosId,
         toPosId: input.toPosId,
         createdById,
-
         items: {
           create: input.items.map((item) => ({
             variantId: item.variantId,
@@ -325,7 +450,6 @@ export async function createDistribution(
           })),
         },
       },
-
       include: {
         items: true,
       },
@@ -344,19 +468,16 @@ export async function createDistribution(
         where: {
           id: item.variantId,
           isActive: true,
-
           product: {
             shopId,
             isActive: true,
           },
         },
-
         select: {
           id: true,
           sku: true,
           price: true,
           shelfLifeDays: true,
-
           product: {
             select: {
               id: true,
@@ -371,7 +492,7 @@ export async function createDistribution(
       }
 
       // ------------------------------------------------
-      // 4.2 TROUVER LE STOCK SOURCE
+      // 4.2 VÉRIFIER LE STOCK SOURCE
       // ------------------------------------------------
 
       const sourceStock = await tx.finishedStock.findFirst({
@@ -399,11 +520,9 @@ export async function createDistribution(
       const sourceLots = await tx.finishedStockLot.findMany({
         where: {
           finishedStockId: sourceStock.id,
-
           remainingQuantity: {
             gt: 0,
           },
-
           OR: [
             {
               expiresAt: null,
@@ -415,7 +534,6 @@ export async function createDistribution(
             },
           ],
         },
-
         orderBy: [
           {
             expiresAt: "asc",
@@ -465,15 +583,11 @@ export async function createDistribution(
       const destinationEntry = await tx.finishedStockEntry.create({
         data: {
           finishedStockId: destinationStock.id,
-
           quantity: item.quantity,
-
           origin: "TRANSFERT",
-
           note: `Distribution depuis ${
             input.fromPosId ? "un point de vente" : "la boutique principale"
           }`,
-
           createdById,
         },
       });
@@ -498,7 +612,6 @@ export async function createDistribution(
           where: {
             id: sourceLot.id,
           },
-
           data: {
             remainingQuantity: {
               decrement: quantityFromLot,
@@ -509,13 +622,9 @@ export async function createDistribution(
         await tx.finishedStockLot.create({
           data: {
             finishedStockId: destinationStock.id,
-
             entryId: destinationEntry.id,
-
             quantity: quantityFromLot,
-
             remainingQuantity: quantityFromLot,
-
             expiresAt: sourceLot.expiresAt,
           },
         });
@@ -535,7 +644,6 @@ export async function createDistribution(
         where: {
           id: sourceStock.id,
         },
-
         data: {
           quantity: {
             decrement: item.quantity,
@@ -551,7 +659,6 @@ export async function createDistribution(
         where: {
           id: destinationStock.id,
         },
-
         data: {
           quantity: {
             increment: item.quantity,
@@ -568,7 +675,6 @@ export async function createDistribution(
       where: {
         id: transfer.id,
       },
-
       include: {
         items: {
           include: {
@@ -576,14 +682,12 @@ export async function createDistribution(
               select: {
                 id: true,
                 sku: true,
-
                 product: {
                   select: {
                     id: true,
                     name: true,
                   },
                 },
-
                 packaging: {
                   select: {
                     id: true,
@@ -596,7 +700,6 @@ export async function createDistribution(
             },
           },
         },
-
         fromPos: {
           select: {
             id: true,
@@ -604,7 +707,6 @@ export async function createDistribution(
             code: true,
           },
         },
-
         toPos: {
           select: {
             id: true,
@@ -612,7 +714,6 @@ export async function createDistribution(
             code: true,
           },
         },
-
         createdBy: {
           select: {
             id: true,
