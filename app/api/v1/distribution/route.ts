@@ -4,21 +4,15 @@ import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
 
-import { createDistribution } from "@/lib/modules/distribution/distribution.service";
-
-import { createDistributionSchema } from "@/lib/modules/distribution/distribution.schema";
-
-// ======================================================
-// CONFIGURATION
-// ======================================================
+import { getDistributionProducts } from "@/lib/modules/distribution/distribution.service";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER"];
 
 // ======================================================
-// POST /api/v1/distribution
+// GET /api/v1/distribution/products
 // ======================================================
 
-export async function POST(request: Request) {
+export async function GET(request: Request) {
   try {
     // --------------------------------------------------
     // AUTORISATION
@@ -27,70 +21,35 @@ export async function POST(request: Request) {
     const user = await authorize(request, ALLOWED_ROLES);
 
     // --------------------------------------------------
-    // BODY
+    // POINT DE DÉPART
+    //
+    // absent = boutique principale
+    // id     = point de vente
     // --------------------------------------------------
 
-    let body: unknown;
+    const { searchParams } = new URL(request.url);
 
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Le corps de la requête est invalide",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
+    const fromPosId = searchParams.get("fromPosId");
 
-    // --------------------------------------------------
-    // VALIDATION
-    // --------------------------------------------------
-
-    const result = createDistributionSchema.safeParse(body);
-
-    if (!result.success) {
-      const message = result.error.issues
-        .map((issue) => issue.message)
-        .join(", ");
-
-      return NextResponse.json(
-        {
-          success: false,
-          message,
-        },
-        {
-          status: 400,
-        },
-      );
-    }
-
-    // --------------------------------------------------
-    // CRÉATION
-    // --------------------------------------------------
-
-    const distribution = await createDistribution(result.data, user.userId);
+    const products = await getDistributionProducts(
+      user.userId,
+      fromPosId || null,
+    );
 
     return NextResponse.json(
       {
         success: true,
-        message: "Distribution créée avec succès",
-        data: {
-          distribution,
-        },
+        data: products,
       },
       {
-        status: 201,
+        status: 200,
       },
     );
   } catch (error) {
-    console.error("POST /api/v1/distribution error:", error);
+    console.error("GET /api/v1/distribution/products error:", error);
 
     // --------------------------------------------------
-    // ERREURS D'AUTORISATION
+    // AUTORISATION
     // --------------------------------------------------
 
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
@@ -133,6 +92,30 @@ export async function POST(request: Request) {
       );
     }
 
+    if (error instanceof Error && error.message === "USER_INACTIVE") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Votre compte est inactif",
+        },
+        {
+          status: 403,
+        },
+      );
+    }
+
+    if (error instanceof Error && error.message === "USER_BANNED") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Votre compte est suspendu",
+        },
+        {
+          status: 403,
+        },
+      );
+    }
+
     // --------------------------------------------------
     // BOUTIQUE
     // --------------------------------------------------
@@ -150,97 +133,17 @@ export async function POST(request: Request) {
     }
 
     // --------------------------------------------------
-    // POINTS DE VENTE
+    // POINT DE VENTE
     // --------------------------------------------------
 
     if (error instanceof Error && error.message === "POINT_OF_SALE_NOT_FOUND") {
       return NextResponse.json(
         {
           success: false,
-          message:
-            "Un des points de vente sélectionnés est introuvable ou inactif",
+          message: "Le point de vente sélectionné est introuvable ou inactif",
         },
         {
           status: 404,
-        },
-      );
-    }
-
-    // --------------------------------------------------
-    // PRODUIT
-    // --------------------------------------------------
-
-    if (
-      error instanceof Error &&
-      error.message === "PRODUCT_VARIANT_NOT_FOUND"
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Un des produits sélectionnés est introuvable ou inactif",
-        },
-        {
-          status: 404,
-        },
-      );
-    }
-
-    // --------------------------------------------------
-    // STOCK SOURCE
-    // --------------------------------------------------
-
-    if (error instanceof Error && error.message === "SOURCE_STOCK_NOT_FOUND") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Le produit ne possède pas de stock dans le point de départ",
-        },
-        {
-          status: 404,
-        },
-      );
-    }
-
-    if (error instanceof Error && error.message === "INSUFFICIENT_STOCK") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "La quantité demandée dépasse le stock disponible",
-        },
-        {
-          status: 409,
-        },
-      );
-    }
-
-    // --------------------------------------------------
-    // LOTS
-    // --------------------------------------------------
-
-    if (
-      error instanceof Error &&
-      error.message === "INSUFFICIENT_AVAILABLE_LOTS"
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "La quantité demandée dépasse le stock disponible dans les lots non expirés",
-        },
-        {
-          status: 409,
-        },
-      );
-    }
-
-    if (error instanceof Error && error.message === "LOT_TRANSFER_FAILED") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Impossible de transférer complètement les lots du produit",
-        },
-        {
-          status: 409,
         },
       );
     }
@@ -252,7 +155,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        message: "Impossible de créer la distribution",
+        message: "Impossible de récupérer les produits disponibles",
       },
       {
         status: 500,

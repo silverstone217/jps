@@ -2,6 +2,182 @@ import { prisma } from "@/lib/prisma";
 
 import type { CreateDistributionInput } from "./distribution.schema";
 
+// ======================================================
+// PRODUITS DISPONIBLES POUR UNE DISTRIBUTION
+// ======================================================
+
+export async function getDistributionProducts(
+  userId: string,
+  fromPosId: string | null,
+) {
+  // ============================================================
+  // 1. RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
+  // ============================================================
+
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+    select: {
+      role: true,
+      isActive: true,
+      isBanned: true,
+
+      shopOwner: {
+        select: {
+          id: true,
+        },
+      },
+
+      assignments: {
+        where: {
+          isActive: true,
+        },
+        select: {
+          shopId: true,
+        },
+        take: 1,
+      },
+    },
+  });
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
+  if (!user.isActive) {
+    throw new Error("USER_INACTIVE");
+  }
+
+  if (user.isBanned) {
+    throw new Error("USER_BANNED");
+  }
+
+  const shopId = user.shopOwner?.id ?? user.assignments[0]?.shopId;
+
+  if (!shopId) {
+    throw new Error("SHOP_NOT_FOUND");
+  }
+
+  // ============================================================
+  // 2. VÉRIFIER LE POINT DE DÉPART
+  //
+  // null = boutique principale
+  // id   = point de vente
+  // ============================================================
+
+  if (fromPosId !== null) {
+    const pointOfSale = await prisma.pointOfSale.findFirst({
+      where: {
+        id: fromPosId,
+        shopId,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+      },
+    });
+
+    if (!pointOfSale) {
+      throw new Error("POINT_OF_SALE_NOT_FOUND");
+    }
+  }
+
+  // ============================================================
+  // 3. RÉCUPÉRER LE STOCK FINI
+  //
+  // pointOfSaleId = null → boutique principale
+  // pointOfSaleId = id   → point de vente
+  // ============================================================
+
+  const stocks = await prisma.finishedStock.findMany({
+    where: {
+      shopId,
+      pointOfSaleId: fromPosId,
+      quantity: {
+        gt: 0,
+      },
+
+      variant: {
+        isActive: true,
+
+        product: {
+          isActive: true,
+        },
+      },
+    },
+
+    select: {
+      variantId: true,
+      quantity: true,
+
+      variant: {
+        select: {
+          id: true,
+          sku: true,
+          price: true,
+          shelfLifeDays: true,
+
+          product: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+            },
+          },
+
+          packaging: {
+            select: {
+              id: true,
+              name: true,
+              size: true,
+              capacityMl: true,
+            },
+          },
+        },
+      },
+    },
+
+    orderBy: {
+      updatedAt: "desc",
+    },
+  });
+
+  // ============================================================
+  // 4. FORMATER POUR LA DISTRIBUTION
+  // ============================================================
+
+  return {
+    location: {
+      type: fromPosId === null ? "MAIN" : "POS",
+
+      pointOfSaleId: fromPosId,
+    },
+
+    products: stocks.map((stock) => ({
+      variantId: stock.variant.id,
+      productId: stock.variant.product.id,
+      productName: stock.variant.product.name,
+      productImage: stock.variant.product.image,
+      sku: stock.variant.sku,
+      price: Number(stock.variant.price),
+      packagingId: stock.variant.packaging.id,
+      packagingName: stock.variant.packaging.name,
+      packagingSize: stock.variant.packaging.size,
+      capacityMl: stock.variant.packaging.capacityMl,
+      quantity: stock.quantity,
+      shelfLifeDays: stock.variant.shelfLifeDays,
+      isActive: true,
+    })),
+  };
+}
+
+// ======================================================
+// CRÉER UNE DISTRIBUTION
+// ======================================================
+
 export async function createDistribution(
   input: CreateDistributionInput,
   createdById: string,
@@ -156,12 +332,6 @@ export async function createDistribution(
 
       // ----------------------------------------------------------
       // 4.3 Récupérer les lots disponibles
-      //
-      // FIFO :
-      // - date d'expiration la plus proche d'abord
-      // - puis date de création
-      //
-      // Les lots déjà expirés ne peuvent pas être distribués.
       // ----------------------------------------------------------
 
       const now = new Date();
@@ -169,9 +339,11 @@ export async function createDistribution(
       const sourceLots = await tx.finishedStockLot.findMany({
         where: {
           finishedStockId: sourceStock.id,
+
           remainingQuantity: {
             gt: 0,
           },
+
           OR: [
             {
               expiresAt: null,
@@ -183,6 +355,7 @@ export async function createDistribution(
             },
           ],
         },
+
         orderBy: [
           {
             expiresAt: "asc",
@@ -232,11 +405,15 @@ export async function createDistribution(
       const destinationEntry = await tx.finishedStockEntry.create({
         data: {
           finishedStockId: destinationStock.id,
+
           quantity: item.quantity,
+
           origin: "TRANSFERT",
+
           note: `Distribution depuis ${
             input.fromPosId ? "un point de vente" : "la boutique principale"
           }`,
+
           createdById,
         },
       });
@@ -257,11 +434,11 @@ export async function createDistribution(
           quantityToTransfer,
         );
 
-        // Diminuer le lot source
         await tx.finishedStockLot.update({
           where: {
             id: sourceLot.id,
           },
+
           data: {
             remainingQuantity: {
               decrement: quantityFromLot,
@@ -269,13 +446,16 @@ export async function createDistribution(
           },
         });
 
-        // Créer le lot destination
         await tx.finishedStockLot.create({
           data: {
             finishedStockId: destinationStock.id,
+
             entryId: destinationEntry.id,
+
             quantity: quantityFromLot,
+
             remainingQuantity: quantityFromLot,
+
             expiresAt: sourceLot.expiresAt,
           },
         });
@@ -283,8 +463,6 @@ export async function createDistribution(
         quantityToTransfer -= quantityFromLot;
       }
 
-      // Cette vérification ne devrait jamais échouer
-      // puisque la quantité disponible a été vérifiée plus haut.
       if (quantityToTransfer > 0) {
         throw new Error("LOT_TRANSFER_FAILED");
       }
@@ -297,6 +475,7 @@ export async function createDistribution(
         where: {
           id: sourceStock.id,
         },
+
         data: {
           quantity: {
             decrement: item.quantity,
@@ -312,6 +491,7 @@ export async function createDistribution(
         where: {
           id: destinationStock.id,
         },
+
         data: {
           quantity: {
             increment: item.quantity,
@@ -328,6 +508,7 @@ export async function createDistribution(
       where: {
         id: transfer.id,
       },
+
       include: {
         items: {
           include: {
@@ -335,12 +516,14 @@ export async function createDistribution(
               select: {
                 id: true,
                 sku: true,
+
                 product: {
                   select: {
                     id: true,
                     name: true,
                   },
                 },
+
                 packaging: {
                   select: {
                     id: true,
@@ -353,6 +536,7 @@ export async function createDistribution(
             },
           },
         },
+
         fromPos: {
           select: {
             id: true,
@@ -360,6 +544,7 @@ export async function createDistribution(
             code: true,
           },
         },
+
         toPos: {
           select: {
             id: true,
@@ -367,6 +552,7 @@ export async function createDistribution(
             code: true,
           },
         },
+
         createdBy: {
           select: {
             id: true,
