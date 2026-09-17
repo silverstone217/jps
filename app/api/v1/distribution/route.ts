@@ -190,24 +190,11 @@ export async function POST(request: Request) {
 
     const body = await request.json();
 
-    console.log("=== DISTRIBUTION CREATE SERVER REQUEST ===");
-
-    console.log({
-      userId: user.userId,
-      body,
-    });
-
     // --------------------------------------------------
     // CRÉER LA DISTRIBUTION
     // --------------------------------------------------
 
     const distribution = await createDistribution(body, user.userId);
-
-    console.log("=== DISTRIBUTION CREATE SERVER SUCCESS ===");
-
-    console.log({
-      distributionId: distribution?.id,
-    });
 
     return NextResponse.json(
       {
