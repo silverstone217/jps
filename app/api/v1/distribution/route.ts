@@ -21,20 +21,23 @@ export async function GET(request: Request) {
     const user = await authorize(request, ALLOWED_ROLES);
 
     // --------------------------------------------------
-    // POINT DE DÉPART
+    // PARAMÈTRE
     //
     // absent = boutique principale
     // id     = point de vente
     // --------------------------------------------------
 
-    const { searchParams } = new URL(request.url);
+    const searchParams = new URL(request.url).searchParams;
 
-    const fromPosId = searchParams.get("fromPosId");
+    const rawFromPosId = searchParams.get("fromPosId");
 
-    const products = await getDistributionProducts(
-      user.userId,
-      fromPosId || null,
-    );
+    const fromPosId = rawFromPosId?.trim() ? rawFromPosId.trim() : null;
+
+    // --------------------------------------------------
+    // PRODUITS
+    // --------------------------------------------------
+
+    const products = await getDistributionProducts(user.userId, fromPosId);
 
     return NextResponse.json(
       {

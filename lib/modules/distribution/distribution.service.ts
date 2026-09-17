@@ -3,17 +3,10 @@ import { prisma } from "@/lib/prisma";
 import type { CreateDistributionInput } from "./distribution.schema";
 
 // ======================================================
-// PRODUITS DISPONIBLES POUR UNE DISTRIBUTION
+// RÉCUPÉRER LE SHOP DE L'UTILISATEUR
 // ======================================================
 
-export async function getDistributionProducts(
-  userId: string,
-  fromPosId: string | null,
-) {
-  // ============================================================
-  // 1. RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
-  // ============================================================
-
+async function getUserShopId(userId: string) {
   const user = await prisma.user.findUnique({
     where: {
       id: userId,
@@ -53,18 +46,51 @@ export async function getDistributionProducts(
     throw new Error("USER_BANNED");
   }
 
-  const shopId = user.shopOwner?.id ?? user.assignments[0]?.shopId;
+  // ----------------------------------------------------
+  // MANAGER
+  // ----------------------------------------------------
+
+  if (user.role === "MANAGER") {
+    if (!user.shopOwner?.id) {
+      throw new Error("SHOP_NOT_FOUND");
+    }
+
+    return user.shopOwner.id;
+  }
+
+  // ----------------------------------------------------
+  // EMPLOYEE
+  // ----------------------------------------------------
+
+  const shopId = user.assignments[0]?.shopId;
 
   if (!shopId) {
     throw new Error("SHOP_NOT_FOUND");
   }
 
-  // ============================================================
+  return shopId;
+}
+
+// ======================================================
+// PRODUITS DISPONIBLES POUR UNE DISTRIBUTION
+// ======================================================
+
+export async function getDistributionProducts(
+  userId: string,
+  fromPosId: string | null,
+) {
+  // ====================================================
+  // 1. RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
+  // ====================================================
+
+  const shopId = await getUserShopId(userId);
+
+  // ====================================================
   // 2. VÉRIFIER LE POINT DE DÉPART
   //
   // null = boutique principale
   // id   = point de vente
-  // ============================================================
+  // ====================================================
 
   if (fromPosId !== null) {
     const pointOfSale = await prisma.pointOfSale.findFirst({
@@ -85,12 +111,12 @@ export async function getDistributionProducts(
     }
   }
 
-  // ============================================================
+  // ====================================================
   // 3. RÉCUPÉRER LE STOCK FINI
   //
   // pointOfSaleId = null → boutique principale
   // pointOfSaleId = id   → point de vente
-  // ============================================================
+  // ====================================================
 
   const stocks = await prisma.finishedStock.findMany({
     where: {
@@ -99,10 +125,8 @@ export async function getDistributionProducts(
       quantity: {
         gt: 0,
       },
-
       variant: {
         isActive: true,
-
         product: {
           isActive: true,
         },
@@ -145,9 +169,9 @@ export async function getDistributionProducts(
     },
   });
 
-  // ============================================================
+  // ====================================================
   // 4. FORMATER POUR LA DISTRIBUTION
-  // ============================================================
+  // ====================================================
 
   return {
     location: {
@@ -158,17 +182,29 @@ export async function getDistributionProducts(
 
     products: stocks.map((stock) => ({
       variantId: stock.variant.id,
+
       productId: stock.variant.product.id,
+
       productName: stock.variant.product.name,
+
       productImage: stock.variant.product.image,
+
       sku: stock.variant.sku,
+
       price: Number(stock.variant.price),
+
       packagingId: stock.variant.packaging.id,
+
       packagingName: stock.variant.packaging.name,
+
       packagingSize: stock.variant.packaging.size,
+
       capacityMl: stock.variant.packaging.capacityMl,
+
       quantity: stock.quantity,
+
       shelfLifeDays: stock.variant.shelfLifeDays,
+
       isActive: true,
     })),
   };
@@ -183,20 +219,26 @@ export async function createDistribution(
   createdById: string,
 ) {
   return prisma.$transaction(async (tx) => {
-    // ============================================================
+    // ==================================================
     // 1. RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
-    // ============================================================
+    // ==================================================
 
     const user = await tx.user.findUnique({
       where: {
         id: createdById,
       },
+
       select: {
+        role: true,
+        isActive: true,
+        isBanned: true,
+
         shopOwner: {
           select: {
             id: true,
           },
         },
+
         assignments: {
           where: {
             isActive: true,
@@ -213,15 +255,29 @@ export async function createDistribution(
       throw new Error("USER_NOT_FOUND");
     }
 
-    const shopId = user.shopOwner?.id ?? user.assignments[0]?.shopId;
+    if (!user.isActive) {
+      throw new Error("USER_INACTIVE");
+    }
+
+    if (user.isBanned) {
+      throw new Error("USER_BANNED");
+    }
+
+    let shopId: string | undefined;
+
+    if (user.role === "MANAGER") {
+      shopId = user.shopOwner?.id;
+    } else {
+      shopId = user.assignments[0]?.shopId;
+    }
 
     if (!shopId) {
       throw new Error("SHOP_NOT_FOUND");
     }
 
-    // ============================================================
+    // ==================================================
     // 2. VÉRIFIER LES POINTS DE VENTE
-    // ============================================================
+    // ==================================================
 
     const posIds = [input.fromPosId, input.toPosId].filter(
       (id): id is string => id !== null,
@@ -238,6 +294,7 @@ export async function createDistribution(
           shopId,
           isActive: true,
         },
+
         select: {
           id: true,
           name: true,
@@ -250,9 +307,9 @@ export async function createDistribution(
       }
     }
 
-    // ============================================================
+    // ==================================================
     // 3. CRÉER LE TRANSFERT
-    // ============================================================
+    // ==================================================
 
     const transfer = await tx.stockTransfer.create({
       data: {
@@ -260,6 +317,7 @@ export async function createDistribution(
         fromPosId: input.fromPosId,
         toPosId: input.toPosId,
         createdById,
+
         items: {
           create: input.items.map((item) => ({
             variantId: item.variantId,
@@ -267,33 +325,38 @@ export async function createDistribution(
           })),
         },
       },
+
       include: {
         items: true,
       },
     });
 
-    // ============================================================
+    // ==================================================
     // 4. TRAITER CHAQUE PRODUIT
-    // ============================================================
+    // ==================================================
 
     for (const item of input.items) {
-      // ----------------------------------------------------------
-      // 4.1 Vérifier que le produit existe
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.1 VÉRIFIER LE PRODUIT
+      // ------------------------------------------------
 
       const variant = await tx.productVariant.findFirst({
         where: {
           id: item.variantId,
           isActive: true,
+
           product: {
             shopId,
+            isActive: true,
           },
         },
+
         select: {
           id: true,
           sku: true,
           price: true,
           shelfLifeDays: true,
+
           product: {
             select: {
               id: true,
@@ -307,12 +370,9 @@ export async function createDistribution(
         throw new Error("PRODUCT_VARIANT_NOT_FOUND");
       }
 
-      // ----------------------------------------------------------
-      // 4.2 Trouver le stock source
-      //
-      // null = stock MAIN
-      // id   = stock d'un POS
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.2 TROUVER LE STOCK SOURCE
+      // ------------------------------------------------
 
       const sourceStock = await tx.finishedStock.findFirst({
         where: {
@@ -330,9 +390,9 @@ export async function createDistribution(
         throw new Error("INSUFFICIENT_STOCK");
       }
 
-      // ----------------------------------------------------------
-      // 4.3 Récupérer les lots disponibles
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.3 RÉCUPÉRER LES LOTS DISPONIBLES
+      // ------------------------------------------------
 
       const now = new Date();
 
@@ -375,9 +435,9 @@ export async function createDistribution(
         throw new Error("INSUFFICIENT_AVAILABLE_LOTS");
       }
 
-      // ----------------------------------------------------------
-      // 4.4 Trouver ou créer le stock destination
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.4 STOCK DESTINATION
+      // ------------------------------------------------
 
       let destinationStock = await tx.finishedStock.findFirst({
         where: {
@@ -398,9 +458,9 @@ export async function createDistribution(
         });
       }
 
-      // ----------------------------------------------------------
-      // 4.5 Créer l'entrée de stock destination
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.5 ENTRÉE DE STOCK DESTINATION
+      // ------------------------------------------------
 
       const destinationEntry = await tx.finishedStockEntry.create({
         data: {
@@ -418,9 +478,9 @@ export async function createDistribution(
         },
       });
 
-      // ----------------------------------------------------------
-      // 4.6 Transférer les lots FIFO
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.6 TRANSFERT FIFO DES LOTS
+      // ------------------------------------------------
 
       let quantityToTransfer = item.quantity;
 
@@ -467,9 +527,9 @@ export async function createDistribution(
         throw new Error("LOT_TRANSFER_FAILED");
       }
 
-      // ----------------------------------------------------------
-      // 4.7 Diminuer le stock source
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.7 DIMINUER LE STOCK SOURCE
+      // ------------------------------------------------
 
       await tx.finishedStock.update({
         where: {
@@ -483,9 +543,9 @@ export async function createDistribution(
         },
       });
 
-      // ----------------------------------------------------------
-      // 4.8 Augmenter le stock destination
-      // ----------------------------------------------------------
+      // ------------------------------------------------
+      // 4.8 AUGMENTER LE STOCK DESTINATION
+      // ------------------------------------------------
 
       await tx.finishedStock.update({
         where: {
@@ -500,9 +560,9 @@ export async function createDistribution(
       });
     }
 
-    // ============================================================
+    // ==================================================
     // 5. RETOURNER LE TRANSFERT
-    // ============================================================
+    // ==================================================
 
     return tx.stockTransfer.findUnique({
       where: {
