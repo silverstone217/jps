@@ -4,7 +4,7 @@ import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
 
-import { getStock, StockServiceError } from "@/lib/modules/stock/stock.service";
+import { getStock } from "@/lib/modules/stock/stock.service";
 
 import { stockQuerySchema } from "@/lib/modules/stock/stock.schema";
 

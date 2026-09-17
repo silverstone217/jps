@@ -1,4 +1,5 @@
 import { Prisma } from "@/app/generated/prisma/client";
+
 import { prisma } from "@/lib/prisma";
 
 import type { StockLocationInput, StockQueryInput } from "./stock.schema";
@@ -21,24 +22,20 @@ export class StockServiceError extends Error {
 // TYPES
 // ======================================================
 
-// type StockLocation = {
-//   type: "MAIN" | "POS";
-//   pointOfSaleId: string | null;
-//   pointOfSaleName: string | null;
-// };
-
 type Pagination = {
   page: number;
   limit: number;
   total: number;
-  hasMore: boolean;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
 };
 
 // ======================================================
 // UTILITAIRES
 // ======================================================
 
-const decimalToNumber = (value: Prisma.Decimal) => {
+const decimalToNumber = (value: Prisma.Decimal): number => {
   return value.toNumber();
 };
 
@@ -53,11 +50,44 @@ const buildPagination = (
   limit: number,
   total: number,
 ): Pagination => {
+  const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+
   return {
     page,
     limit,
     total,
-    hasMore: page * limit < total,
+    totalPages,
+    hasNextPage: totalPages > 0 && page < totalPages,
+    hasPreviousPage: page > 1,
+  };
+};
+
+// ======================================================
+// UTILITAIRE LOCALISATION
+// ======================================================
+
+const buildStockLocation = (stockLocation: {
+  type: "MAIN" | "POS";
+  pointOfSaleId: string | null;
+  pointOfSaleName: string | null;
+  pointOfSaleCode?: string | null;
+}) => {
+  return {
+    type: stockLocation.type,
+    pointOfSaleId: stockLocation.pointOfSaleId,
+    name:
+      stockLocation.type === "MAIN"
+        ? "Boutique principale"
+        : (stockLocation.pointOfSaleName ?? "Point de vente"),
+    ...(stockLocation.type === "POS" && stockLocation.pointOfSaleCode
+      ? {
+          code: stockLocation.pointOfSaleCode,
+        }
+      : stockLocation.type === "MAIN"
+        ? {
+            code: "MAIN",
+          }
+        : {}),
   };
 };
 
@@ -70,7 +100,6 @@ const getUser = async (userId: string) => {
     where: {
       id: userId,
     },
-
     select: {
       id: true,
       role: true,
@@ -221,6 +250,7 @@ const resolveStockLocation = async (
   location?: StockLocationInput,
 ) => {
   const user = await getUser(userId);
+
   const shop = await getMainShop();
 
   // ====================================================
@@ -239,6 +269,7 @@ const resolveStockLocation = async (
           type: "MAIN" as const,
           pointOfSaleId: null,
           pointOfSaleName: null,
+          pointOfSaleCode: null,
         },
       };
     }
@@ -252,6 +283,7 @@ const resolveStockLocation = async (
           type: "MAIN" as const,
           pointOfSaleId: null,
           pointOfSaleName: null,
+          pointOfSaleCode: null,
         },
       };
     }
@@ -273,6 +305,7 @@ const resolveStockLocation = async (
         type: "POS" as const,
         pointOfSaleId: pointOfSale.id,
         pointOfSaleName: pointOfSale.name,
+        pointOfSaleCode: pointOfSale.code,
       },
     };
   }
@@ -317,6 +350,7 @@ const resolveStockLocation = async (
       type: "POS" as const,
       pointOfSaleId: assignment.pointOfSaleId,
       pointOfSaleName: assignment.pointOfSale.name,
+      pointOfSaleCode: assignment.pointOfSale.code,
     },
   };
 };
@@ -331,19 +365,19 @@ const getRawIngredients = async (
 ): Promise<{
   items: Array<{
     id: string;
-    category: "RAW_INGREDIENT";
     name: string;
-    unit: string;
-    quantity: number;
+    unit: "PIECE" | "GRAM" | "KILOGRAM" | "MILLILITER" | "LITER";
+    stockQty: number;
     minAlert: number;
     isLowStock: boolean;
     isActive: boolean;
-    updatedAt: string;
   }>;
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
+
   const limit = query.limit ?? 20;
+
   const search = normalizeSearch(query.search);
 
   const where = {
@@ -360,21 +394,6 @@ const getRawIngredients = async (
       },
     }),
   };
-
-  // ====================================================
-  // LOW STOCK
-  // ====================================================
-  //
-  // Prisma ne permet pas ici de comparer directement
-  // stockQty <= minAlert dans un where standard.
-  //
-  // On récupère donc les lignes correspondant aux
-  // autres filtres, puis on applique le seuil avant
-  // la pagination.
-  //
-  // Ce filtre est optionnel et reste réservé au
-  // cas où l'utilisateur le demande.
-  // ====================================================
 
   if (query.lowStock) {
     const ingredients = await prisma.rawIngredient.findMany({
@@ -396,7 +415,6 @@ const getRawIngredients = async (
         stockQty: true,
         minAlert: true,
         isActive: true,
-        updatedAt: true,
       },
     });
 
@@ -413,23 +431,17 @@ const getRawIngredients = async (
     return {
       items: paginated.map((ingredient) => ({
         id: ingredient.id,
-        category: "RAW_INGREDIENT" as const,
         name: ingredient.name,
         unit: ingredient.unit,
-        quantity: decimalToNumber(ingredient.stockQty),
+        stockQty: decimalToNumber(ingredient.stockQty),
         minAlert: decimalToNumber(ingredient.minAlert),
         isLowStock: true,
         isActive: ingredient.isActive,
-        updatedAt: ingredient.updatedAt.toISOString(),
       })),
 
       pagination: buildPagination(page, limit, total),
     };
   }
-
-  // ====================================================
-  // PAGINATION NORMALE
-  // ====================================================
 
   const [total, ingredients] = await Promise.all([
     prisma.rawIngredient.count({
@@ -459,27 +471,24 @@ const getRawIngredients = async (
         stockQty: true,
         minAlert: true,
         isActive: true,
-        updatedAt: true,
       },
     }),
   ]);
 
   return {
     items: ingredients.map((ingredient) => {
-      const quantity = decimalToNumber(ingredient.stockQty);
+      const stockQty = decimalToNumber(ingredient.stockQty);
 
       const minAlert = decimalToNumber(ingredient.minAlert);
 
       return {
         id: ingredient.id,
-        category: "RAW_INGREDIENT" as const,
         name: ingredient.name,
         unit: ingredient.unit,
-        quantity,
+        stockQty,
         minAlert,
-        isLowStock: quantity <= minAlert,
+        isLowStock: stockQty <= minAlert,
         isActive: ingredient.isActive,
-        updatedAt: ingredient.updatedAt.toISOString(),
       };
     }),
 
@@ -497,20 +506,20 @@ const getPackagings = async (
 ): Promise<{
   items: Array<{
     id: string;
-    category: "PACKAGING";
     name: string;
-    size: string;
+    size: "ML_200" | "ML_500";
     capacityMl: number;
-    quantity: number;
+    stockQty: number;
     minAlert: number;
     isLowStock: boolean;
     isActive: boolean;
-    updatedAt: string;
   }>;
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
+
   const limit = query.limit ?? 20;
+
   const search = normalizeSearch(query.search);
 
   const where = {
@@ -527,10 +536,6 @@ const getPackagings = async (
       },
     }),
   };
-
-  // ====================================================
-  // LOW STOCK
-  // ====================================================
 
   if (query.lowStock) {
     const packagings = await prisma.packaging.findMany({
@@ -553,7 +558,6 @@ const getPackagings = async (
         stockQty: true,
         minAlert: true,
         isActive: true,
-        updatedAt: true,
       },
     });
 
@@ -570,24 +574,18 @@ const getPackagings = async (
     return {
       items: paginated.map((packaging) => ({
         id: packaging.id,
-        category: "PACKAGING" as const,
         name: packaging.name,
         size: packaging.size,
         capacityMl: packaging.capacityMl,
-        quantity: packaging.stockQty,
+        stockQty: packaging.stockQty,
         minAlert: packaging.minAlert,
         isLowStock: true,
         isActive: packaging.isActive,
-        updatedAt: packaging.updatedAt.toISOString(),
       })),
 
       pagination: buildPagination(page, limit, total),
     };
   }
-
-  // ====================================================
-  // PAGINATION NORMALE
-  // ====================================================
 
   const [total, packagings] = await Promise.all([
     prisma.packaging.count({
@@ -618,7 +616,6 @@ const getPackagings = async (
         stockQty: true,
         minAlert: true,
         isActive: true,
-        updatedAt: true,
       },
     }),
   ]);
@@ -626,15 +623,13 @@ const getPackagings = async (
   return {
     items: packagings.map((packaging) => ({
       id: packaging.id,
-      category: "PACKAGING" as const,
       name: packaging.name,
       size: packaging.size,
       capacityMl: packaging.capacityMl,
-      quantity: packaging.stockQty,
+      stockQty: packaging.stockQty,
       minAlert: packaging.minAlert,
       isLowStock: packaging.stockQty <= packaging.minAlert,
       isActive: packaging.isActive,
-      updatedAt: packaging.updatedAt.toISOString(),
     })),
 
     pagination: buildPagination(page, limit, total),
@@ -652,28 +647,26 @@ const getFinishedProducts = async (
 ): Promise<{
   items: Array<{
     id: string;
-    category: "FINISHED_PRODUCT";
     variantId: string;
     productId: string;
+    productName: string;
+    productImage: string | null;
     sku: string;
-    name: string;
-    image: string | null;
-    quantity: number;
     price: number;
+    packagingId: string;
+    packagingName: string;
+    packagingSize: "ML_200" | "ML_500";
+    capacityMl: number;
+    quantity: number;
     shelfLifeDays: number;
-    packaging: {
-      id: string;
-      name: string;
-      size: string;
-      capacityMl: number;
-    };
     isActive: boolean;
-    updatedAt: string;
   }>;
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
+
   const limit = query.limit ?? 20;
+
   const search = normalizeSearch(query.search);
 
   const where = {
@@ -727,12 +720,14 @@ const getFinishedProducts = async (
             sku: true,
             price: true,
             shelfLifeDays: true,
+            isActive: true,
 
             product: {
               select: {
                 id: true,
                 name: true,
                 image: true,
+                isActive: true,
               },
             },
 
@@ -753,37 +748,19 @@ const getFinishedProducts = async (
   return {
     items: stocks.map((stock) => ({
       id: stock.id,
-      category: "FINISHED_PRODUCT" as const,
-
       variantId: stock.variant.id,
-
       productId: stock.variant.product.id,
-
+      productName: stock.variant.product.name,
+      productImage: stock.variant.product.image,
       sku: stock.variant.sku,
-
-      name: stock.variant.product.name,
-
-      image: stock.variant.product.image,
-
-      quantity: stock.quantity,
-
       price: decimalToNumber(stock.variant.price),
-
+      packagingId: stock.variant.packaging.id,
+      packagingName: stock.variant.packaging.name,
+      packagingSize: stock.variant.packaging.size,
+      capacityMl: stock.variant.packaging.capacityMl,
+      quantity: stock.quantity,
       shelfLifeDays: stock.variant.shelfLifeDays,
-
-      packaging: {
-        id: stock.variant.packaging.id,
-
-        name: stock.variant.packaging.name,
-
-        size: stock.variant.packaging.size,
-
-        capacityMl: stock.variant.packaging.capacityMl,
-      },
-
-      isActive: true,
-
-      updatedAt: stock.updatedAt.toISOString(),
+      isActive: stock.variant.isActive && stock.variant.product.isActive,
     })),
 
     pagination: buildPagination(page, limit, total),
@@ -791,7 +768,7 @@ const getFinishedProducts = async (
 };
 
 // ======================================================
-// RÉSUMÉ GLOBAL DU STOCK
+// RÉSUMÉ DU STOCK
 // ======================================================
 
 const getStockSummary = async (
@@ -843,21 +820,21 @@ const getStockSummary = async (
   ]);
 
   return {
-    rawIngredients: rawIngredients.length,
+    rawIngredientsCount: rawIngredients.length,
 
-    packagings: packagings.length,
+    packagingCount: packagings.length,
 
-    finishedProducts: finishedProducts.length,
+    finishedProductsCount: finishedProducts.length,
 
-    lowStockRawIngredients: rawIngredients.filter((item) =>
+    lowStockRawIngredientsCount: rawIngredients.filter((item) =>
       item.stockQty.lte(item.minAlert),
     ).length,
 
-    lowStockPackagings: packagings.filter(
+    lowStockPackagingCount: packagings.filter(
       (item) => item.stockQty <= item.minAlert,
     ).length,
 
-    finishedProductQuantity: finishedProducts.reduce(
+    totalFinishedQuantity: finishedProducts.reduce(
       (total, item) => total + item.quantity,
       0,
     ),
@@ -872,6 +849,7 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
   const requestedLocation = query.locationType
     ? {
         locationType: query.locationType,
+
         pointOfSaleId: query.pointOfSaleId,
       }
     : undefined;
@@ -884,6 +862,8 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
   const category = query.category;
 
   const summary = await getStockSummary(shop.id, stockLocation.pointOfSaleId);
+
+  const location = buildStockLocation(stockLocation);
 
   // ====================================================
   // MATIÈRES PREMIÈRES
@@ -900,18 +880,10 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
     const result = await getRawIngredients(shop.id, query);
 
     return {
-      location: {
-        type: stockLocation.type,
-        pointOfSaleId: stockLocation.pointOfSaleId,
-        pointOfSaleName: stockLocation.pointOfSaleName,
-      },
-
+      location,
       category,
-
       items: result.items,
-
       pagination: result.pagination,
-
       summary,
     };
   }
@@ -931,18 +903,10 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
     const result = await getPackagings(shop.id, query);
 
     return {
-      location: {
-        type: stockLocation.type,
-        pointOfSaleId: stockLocation.pointOfSaleId,
-        pointOfSaleName: stockLocation.pointOfSaleName,
-      },
-
+      location,
       category,
-
       items: result.items,
-
       pagination: result.pagination,
-
       summary,
     };
   }
@@ -959,36 +923,16 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
     );
 
     return {
-      location: {
-        type: stockLocation.type,
-        pointOfSaleId: stockLocation.pointOfSaleId,
-        pointOfSaleName: stockLocation.pointOfSaleName,
-      },
-
+      location,
       category,
-
       items: result.items,
-
       pagination: result.pagination,
-
       summary,
     };
   }
 
   // ====================================================
   // AUCUNE CATÉGORIE
-  // ====================================================
-  //
-  // On retourne la première page de chaque
-  // catégorie.
-  //
-  // Le frontend peut ensuite demander :
-  //
-  // category=RAW_INGREDIENT
-  // category=PACKAGING
-  // category=FINISHED_PRODUCT
-  //
-  // pour continuer le scroll de chaque liste.
   // ====================================================
 
   const rawIngredients =
@@ -1014,11 +958,7 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
   );
 
   return {
-    location: {
-      type: stockLocation.type,
-      pointOfSaleId: stockLocation.pointOfSaleId,
-      pointOfSaleName: stockLocation.pointOfSaleName,
-    },
+    location,
 
     categories: {
       rawIngredients: {
@@ -1055,9 +995,7 @@ export const getStockProduct = async (
   const finishedStock = await prisma.finishedStock.findFirst({
     where: {
       shopId: shop.id,
-
       pointOfSaleId: stockLocation.pointOfSaleId,
-
       variantId,
     },
 
@@ -1118,33 +1056,6 @@ export const getStockProduct = async (
           expiresAt: true,
           createdAt: true,
           updatedAt: true,
-
-          entry: {
-            select: {
-              id: true,
-              quantity: true,
-              origin: true,
-              note: true,
-              createdAt: true,
-
-              productionItem: {
-                select: {
-                  id: true,
-                  productionId: true,
-                  quantityProduced: true,
-                  remainingQuantity: true,
-                  expiresAt: true,
-                },
-              },
-
-              createdBy: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
         },
       },
 
@@ -1154,21 +1065,15 @@ export const getStockProduct = async (
         },
 
         take: 20,
-
         select: {
           id: true,
           quantity: true,
           origin: true,
           note: true,
           createdAt: true,
-
           productionItem: {
             select: {
               id: true,
-              productionId: true,
-              quantityProduced: true,
-              remainingQuantity: true,
-              expiresAt: true,
             },
           },
 
@@ -1190,123 +1095,54 @@ export const getStockProduct = async (
     );
   }
 
-  return {
-    location: {
-      type: stockLocation.type,
-      pointOfSaleId: stockLocation.pointOfSaleId,
-      pointOfSaleName: stockLocation.pointOfSaleName,
-    },
+  const locationInfo = buildStockLocation(stockLocation);
 
+  const productIsActive =
+    finishedStock.variant.isActive && finishedStock.variant.product.isActive;
+
+  return {
+    location: locationInfo,
     stock: {
       id: finishedStock.id,
-      quantity: finishedStock.quantity,
-      updatedAt: finishedStock.updatedAt.toISOString(),
-    },
-
-    product: {
       variantId: finishedStock.variant.id,
-
       productId: finishedStock.variant.product.id,
-
+      productName: finishedStock.variant.product.name,
+      productImage: finishedStock.variant.product.image,
       sku: finishedStock.variant.sku,
-
-      name: finishedStock.variant.product.name,
-
-      description: finishedStock.variant.product.description,
-
-      image: finishedStock.variant.product.image,
-
       price: decimalToNumber(finishedStock.variant.price),
-
+      packagingId: finishedStock.variant.packaging.id,
+      packagingName: finishedStock.variant.packaging.name,
+      packagingSize: finishedStock.variant.packaging.size,
+      capacityMl: finishedStock.variant.packaging.capacityMl,
+      quantity: finishedStock.quantity,
       shelfLifeDays: finishedStock.variant.shelfLifeDays,
-
-      isActive:
-        finishedStock.variant.isActive &&
-        finishedStock.variant.product.isActive,
-
-      packaging: {
-        id: finishedStock.variant.packaging.id,
-
-        name: finishedStock.variant.packaging.name,
-
-        size: finishedStock.variant.packaging.size,
-
-        capacityMl: finishedStock.variant.packaging.capacityMl,
-      },
+      isActive: productIsActive,
     },
 
     lots: finishedStock.lots.map((lot) => ({
       id: lot.id,
+
       quantity: lot.quantity,
+
       remainingQuantity: lot.remainingQuantity,
-
       expiresAt: lot.expiresAt?.toISOString() ?? null,
-
       createdAt: lot.createdAt.toISOString(),
-
       updatedAt: lot.updatedAt.toISOString(),
-
-      entry: {
-        id: lot.entry.id,
-        quantity: lot.entry.quantity,
-
-        origin: lot.entry.origin,
-
-        note: lot.entry.note,
-
-        createdAt: lot.entry.createdAt.toISOString(),
-
-        productionItem: lot.entry.productionItem
-          ? {
-              id: lot.entry.productionItem.id,
-
-              productionId: lot.entry.productionItem.productionId,
-
-              quantityProduced: lot.entry.productionItem.quantityProduced,
-
-              remainingQuantity: lot.entry.productionItem.remainingQuantity,
-
-              expiresAt: lot.entry.productionItem.expiresAt.toISOString(),
-            }
-          : null,
-
-        createdBy: {
-          id: lot.entry.createdBy.id,
-
-          name: lot.entry.createdBy.name,
-        },
-      },
+      isExpired: lot.expiresAt ? lot.expiresAt.getTime() <= Date.now() : false,
     })),
 
     entries: finishedStock.entries.map((entry) => ({
       id: entry.id,
       quantity: entry.quantity,
-
       origin: entry.origin,
-
       note: entry.note,
-
       createdAt: entry.createdAt.toISOString(),
-
-      productionItem: entry.productionItem
-        ? {
-            id: entry.productionItem.id,
-
-            productionId: entry.productionItem.productionId,
-
-            quantityProduced: entry.productionItem.quantityProduced,
-
-            remainingQuantity: entry.productionItem.remainingQuantity,
-
-            expiresAt: entry.productionItem.expiresAt.toISOString(),
-          }
-        : null,
 
       createdBy: {
         id: entry.createdBy.id,
-
         name: entry.createdBy.name,
       },
+      productionItemId: entry.productionItem?.id ?? null,
     })),
   };
 };
