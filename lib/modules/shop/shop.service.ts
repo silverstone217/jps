@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+
 import { cloudinary } from "@/lib/cloudinary";
 
 import type { UpdateShopInput } from "./shop.schema";
@@ -46,6 +47,18 @@ export class ShopService {
         email: data.email || null,
         address: data.address,
         currency: data.currency,
+
+        // ==================================================
+        // FIDÉLITÉ
+        // ==================================================
+
+        loyaltyPurchaseAmount: data.loyaltyPurchaseAmount,
+
+        loyaltyPointsEarned: data.loyaltyPointsEarned,
+
+        loyaltyPointsForDiscount: data.loyaltyPointsForDiscount,
+
+        loyaltyDiscountAmount: data.loyaltyDiscountAmount,
       },
     });
 

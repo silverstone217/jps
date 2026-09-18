@@ -152,6 +152,26 @@ model Shop {
 
   currency Currency @default(CDF)
 
+  // ======================================================
+  // FIDÉLITÉ
+  // ======================================================
+
+  // Montant d'achat nécessaire pour générer les points
+  // Exemple : 3000 FC
+  loyaltyPurchaseAmount Decimal @default(3000) @db.Decimal(14, 2)
+
+  // Nombre de points générés pour ce montant
+  // Exemple : 10 points
+  loyaltyPointsEarned Int @default(10)
+
+  // Nombre de points nécessaires pour obtenir une réduction
+  // Exemple : 100 points
+  loyaltyPointsForDiscount Int @default(100)
+
+  // Montant de la réduction accordée
+  // Exemple : 1000 FC
+  loyaltyDiscountAmount Decimal @default(1000) @db.Decimal(14, 2)
+
   ownerId String? @unique
 
   createdAt DateTime @default(now())

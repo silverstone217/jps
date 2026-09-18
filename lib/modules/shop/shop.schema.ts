@@ -33,6 +33,28 @@ export const updateShopSchema = z.object({
   currency: z.enum(["CDF", "USD", "EUR"], {
     message: "La devise sélectionnée est invalide",
   }),
+
+  // ======================================================
+  // FIDÉLITÉ
+  // ======================================================
+
+  loyaltyPurchaseAmount: z
+    .number()
+    .positive("Le montant d'achat doit être supérieur à 0"),
+
+  loyaltyPointsEarned: z
+    .number()
+    .int("Le nombre de points doit être un nombre entier")
+    .positive("Le nombre de points doit être supérieur à 0"),
+
+  loyaltyPointsForDiscount: z
+    .number()
+    .int("Le nombre de points doit être un nombre entier")
+    .positive("Le nombre de points doit être supérieur à 0"),
+
+  loyaltyDiscountAmount: z
+    .number()
+    .positive("Le montant de la réduction doit être supérieur à 0"),
 });
 
 export type UpdateShopInput = z.infer<typeof updateShopSchema>;
