@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import ShopService from "@/lib/modules/shop/shop.service";
+
 import { updateShopSchema } from "@/lib/modules/shop/shop.schema";
+
 import { authorize } from "@/lib/modules/auth/authorize";
 
 const VIEW_ROLES: Role[] = ["MANAGER", "EMPLOYEE"];
+
 const EDIT_ROLES: Role[] = ["MANAGER"];
 
 // ============================================================
@@ -93,11 +96,18 @@ export async function PATCH(request: Request) {
     const result = updateShopSchema.safeParse(body);
 
     if (!result.success) {
+      const message = result.error.issues
+        .map((issue) => {
+          const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+
+          return `${path}${issue.message}`;
+        })
+        .join(" | ");
+
       return NextResponse.json(
         {
           success: false,
-          message: "Données invalides",
-          errors: result.error.issues,
+          message,
         },
         {
           status: 400,
