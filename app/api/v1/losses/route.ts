@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 import { authorize } from "@/lib/modules/auth/authorize";
-
 import {
   createExpiredLosses,
   createLoss,
   getLosses,
   getPendingLosses,
 } from "@/lib/modules/loss/loss.service";
-
 import { createLossSchema } from "@/lib/modules/loss/loss.schema";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER"];
@@ -20,9 +18,7 @@ const ALLOWED_ROLES: Role[] = ["MANAGER"];
 export async function GET(request: Request) {
   try {
     const user = await authorize(request, ALLOWED_ROLES);
-
     const searchParams = new URL(request.url).searchParams;
-
     const pending = searchParams.get("pending");
 
     // ========================================================
@@ -49,17 +45,13 @@ export async function GET(request: Request) {
 
     const rawPage = searchParams.get("page");
     const rawLimit = searchParams.get("limit");
-
     const rawCategory = searchParams.get("category");
     const rawReason = searchParams.get("reason");
     const rawPointOfSaleId = searchParams.get("pointOfSaleId");
-
     const page = rawPage ? Number(rawPage) : 1;
-
     const limit = rawLimit ? Number(rawLimit) : 20;
     const category = rawCategory?.trim() ? rawCategory.trim() : undefined;
     const reason = rawReason?.trim() ? rawReason.trim() : undefined;
-
     const pointOfSaleId = rawPointOfSaleId?.trim()
       ? rawPointOfSaleId.trim()
       : undefined;
@@ -131,6 +123,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Utilisateur introuvable.",
+            code,
           },
           {
             status: 404,
@@ -142,6 +135,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Ce compte utilisateur est inactif.",
+            code,
           },
           {
             status: 403,
@@ -153,6 +147,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Ce compte utilisateur est temporairement bloqué.",
+            code,
           },
           {
             status: 403,
@@ -164,6 +159,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Boutique introuvable.",
+            code,
           },
           {
             status: 404,
@@ -175,6 +171,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Point de vente introuvable.",
+            code,
           },
           {
             status: 404,
@@ -186,6 +183,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Ce point de vente est inactif.",
+            code,
           },
           {
             status: 400,
@@ -197,6 +195,7 @@ export async function GET(request: Request) {
           {
             success: false,
             message: "Impossible de récupérer les pertes.",
+            code,
           },
           {
             status: 500,
@@ -269,6 +268,10 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("POST /api/v1/losses error:", error);
 
+    // ========================================================
+    // AUTHORIZATION
+    // ========================================================
+
     if (error instanceof Error) {
       switch (error.message) {
         case "UNAUTHORIZED":
@@ -295,10 +298,18 @@ export async function POST(request: Request) {
       }
     }
 
+    // ========================================================
+    // ERROR CODE
+    // ========================================================
+
     const code =
       "code" in (error as object)
         ? (error as { code?: string }).code
         : undefined;
+
+    // ========================================================
+    // ERRORS MÉTIER
+    // ========================================================
 
     switch (code) {
       case "USER_NOT_FOUND":
@@ -306,6 +317,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Utilisateur introuvable.",
+            code,
           },
           {
             status: 404,
@@ -317,6 +329,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Ce compte utilisateur est inactif.",
+            code,
           },
           {
             status: 403,
@@ -328,6 +341,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Ce compte utilisateur est temporairement bloqué.",
+            code,
           },
           {
             status: 403,
@@ -339,6 +353,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Boutique introuvable.",
+            code,
           },
           {
             status: 404,
@@ -350,6 +365,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Matière première introuvable.",
+            code,
           },
           {
             status: 404,
@@ -361,6 +377,7 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Packaging introuvable.",
+            code,
           },
           {
             status: 404,
@@ -372,57 +389,91 @@ export async function POST(request: Request) {
           {
             success: false,
             message: "Le lot de produits finis est introuvable.",
+            code,
           },
           {
             status: 404,
           },
         );
 
+      // ======================================================
+      // STOCK INSUFFISANT — MATIÈRE PREMIÈRE
+      // ======================================================
+
       case "INSUFFICIENT_INGREDIENT_STOCK":
         return NextResponse.json(
           {
             success: false,
-            message: "Stock de matière première insuffisant.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Stock de matière première insuffisant.",
+            code,
           },
           {
             status: 400,
           },
         );
 
+      // ======================================================
+      // STOCK INSUFFISANT — PACKAGING
+      // ======================================================
+
       case "INSUFFICIENT_PACKAGING_STOCK":
         return NextResponse.json(
           {
             success: false,
-            message: "Stock de packaging insuffisant.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Stock de packaging insuffisant.",
+            code,
           },
           {
             status: 400,
           },
         );
+
+      // ======================================================
+      // STOCK INSUFFISANT — PRODUIT FINI
+      // ======================================================
 
       case "INSUFFICIENT_FINISHED_STOCK_LOT":
         return NextResponse.json(
           {
             success: false,
             message:
-              "La quantité demandée dépasse la quantité disponible dans ce lot.",
+              error instanceof Error
+                ? error.message
+                : "La quantité demandée dépasse la quantité disponible dans ce lot.",
+            code,
           },
           {
             status: 400,
           },
         );
 
+      // ======================================================
+      // QUANTITÉS INVALIDES
+      // ======================================================
+
       case "INVALID_PACKAGING_QUANTITY":
+
       case "INVALID_FINISHED_PRODUCT_QUANTITY":
         return NextResponse.json(
           {
             success: false,
             message: "La quantité doit être un nombre entier.",
+            code,
           },
           {
             status: 400,
           },
         );
+
+      // ======================================================
+      // INCOHÉRENCE STOCK PRODUIT FINI
+      // ======================================================
 
       case "INCONSISTENT_FINISHED_STOCK":
         return NextResponse.json(
@@ -430,17 +481,26 @@ export async function POST(request: Request) {
             success: false,
             message:
               "Une incohérence a été détectée dans le stock de produits finis.",
+            code,
           },
           {
             status: 409,
           },
         );
 
+      // ======================================================
+      // DEFAULT
+      // ======================================================
+
       default:
         return NextResponse.json(
           {
             success: false,
-            message: "Impossible d'enregistrer la perte.",
+            message:
+              error instanceof Error && error.message
+                ? error.message
+                : "Impossible d'enregistrer la perte.",
+            code,
           },
           {
             status: 500,

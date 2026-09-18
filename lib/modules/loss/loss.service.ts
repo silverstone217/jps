@@ -1,7 +1,5 @@
 import { Prisma } from "@/app/generated/prisma/client";
-
 import type { CreateLossInput } from "@/lib/modules/loss/loss.schema";
-
 import { prisma } from "@/lib/prisma";
 
 // ============================================================
@@ -132,9 +130,7 @@ export async function getLosses(userId: string, query: LossQueryInput = {}) {
   await validateManager(userId);
 
   const shop = await getMainShop();
-
   const page = Math.max(1, query.page ?? 1);
-
   const limit = Math.min(100, Math.max(1, query.limit ?? 20));
 
   const where: Prisma.LossWhereInput = {
@@ -265,9 +261,7 @@ export async function getPendingLosses(userId: string) {
   await validateManager(userId);
 
   const shop = await getMainShop();
-
   const now = new Date();
-
   const lots = await prisma.finishedStockLot.findMany({
     where: {
       remainingQuantity: {
@@ -387,9 +381,7 @@ export async function getPendingLosses(userId: string) {
 
 export async function createLoss(userId: string, input: CreateLossInput) {
   await validateManager(userId);
-
   const shop = await getMainShop();
-
   return prisma.$transaction(async (tx) => {
     // ======================================================
     // MATIÈRE PREMIÈRE
@@ -658,9 +650,7 @@ export async function createLoss(userId: string, input: CreateLossInput) {
 
 export async function createExpiredLosses(userId: string) {
   await validateManager(userId);
-
   const shop = await getMainShop();
-
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
