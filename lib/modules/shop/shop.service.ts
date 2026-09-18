@@ -19,7 +19,11 @@ export class ShopService {
       throw new Error("SHOP_NOT_FOUND");
     }
 
-    return shop;
+    return {
+      ...shop,
+      loyaltyPurchaseAmount: Number(shop.loyaltyPurchaseAmount),
+      loyaltyDiscountAmount: Number(shop.loyaltyDiscountAmount),
+    };
   }
 
   /**
@@ -62,7 +66,11 @@ export class ShopService {
       },
     });
 
-    return shop;
+    return {
+      ...shop,
+      loyaltyPurchaseAmount: Number(shop.loyaltyPurchaseAmount),
+      loyaltyDiscountAmount: Number(shop.loyaltyDiscountAmount),
+    };
   }
 
   /**
@@ -121,7 +129,8 @@ export class ShopService {
     });
 
     /**
-     * Enregistrer uniquement l'URL Cloudinary dans PostgreSQL.
+     * Enregistrer uniquement l'URL Cloudinary
+     * dans PostgreSQL.
      */
     const shop = await prisma.shop.update({
       where: {
@@ -133,8 +142,8 @@ export class ShopService {
     });
 
     /**
-     * Supprimer l'ancien logo de Cloudinary après
-     * la mise à jour réussie de la base de données.
+     * Supprimer l'ancien logo de Cloudinary
+     * après la mise à jour réussie de la base de données.
      */
     if (existingShop.logo) {
       try {
@@ -146,7 +155,8 @@ export class ShopService {
           let publicId = oldLogoUrl.substring(uploadIndex + "/upload/".length);
 
           /**
-           * Supprimer les transformations et la version.
+           * Supprimer les transformations
+           * et la version.
            */
           publicId = publicId.replace(/^v\d+\//, "");
 
@@ -159,14 +169,19 @@ export class ShopService {
         }
       } catch (error) {
         /**
-         * La suppression de l'ancien logo ne doit pas
-         * faire échouer la modification déjà enregistrée.
+         * La suppression de l'ancien logo
+         * ne doit pas faire échouer la modification
+         * déjà enregistrée.
          */
         console.error("Cloudinary old shop logo deletion error:", error);
       }
     }
 
-    return shop;
+    return {
+      ...shop,
+      loyaltyPurchaseAmount: Number(shop.loyaltyPurchaseAmount),
+      loyaltyDiscountAmount: Number(shop.loyaltyDiscountAmount),
+    };
   }
 
   /**
@@ -184,8 +199,8 @@ export class ShopService {
     }
 
     /**
-     * Supprimer le fichier de Cloudinary avant
-     * de supprimer son URL de la base.
+     * Supprimer le fichier de Cloudinary
+     * avant de supprimer son URL de la base.
      */
     if (existingShop.logo) {
       try {
@@ -219,7 +234,11 @@ export class ShopService {
       },
     });
 
-    return shop;
+    return {
+      ...shop,
+      loyaltyPurchaseAmount: Number(shop.loyaltyPurchaseAmount),
+      loyaltyDiscountAmount: Number(shop.loyaltyDiscountAmount),
+    };
   }
 }
 
