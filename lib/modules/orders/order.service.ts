@@ -1,8 +1,11 @@
 import type { Role } from "@/app/generated/prisma/client";
+
 import { prisma } from "@/lib/prisma";
 
 import type {
   AssignOrderPosInput,
+  CreateOrderCustomerInput,
+  GetOrderCustomerInput,
   GetOrderProductsInput,
 } from "./order.schema";
 
@@ -31,7 +34,7 @@ type OrderPos = {
 // ============================================================
 
 async function getUserShop(user: AuthenticatedUser) {
-  /*
+  /**
    * Un MANAGER propriétaire est relié directement au Shop
    * via Shop.ownerId.
    *
@@ -64,7 +67,7 @@ async function getUserShop(user: AuthenticatedUser) {
     }
   }
 
-  /*
+  /**
    * Si aucune affectation n'existe, un MANAGER peut encore
    * retrouver son shop via ownerId.
    *
@@ -109,7 +112,7 @@ async function getAuthorizedPos(
     throw new Error("POS_NOT_FOUND");
   }
 
-  /*
+  /**
    * MANAGER :
    * peut travailler dans n'importe quel POS actif.
    */
@@ -121,7 +124,7 @@ async function getAuthorizedPos(
     };
   }
 
-  /*
+  /**
    * EMPLOYEE :
    * doit obligatoirement avoir une affectation active
    * vers ce POS.
@@ -198,7 +201,7 @@ export async function getOrderPos(
   return pointOfSales.map((pointOfSale) => {
     const isAssigned = assignedPosIds.has(pointOfSale.id);
 
-    /*
+    /**
      * MANAGER :
      * peut choisir tous les POS actifs,
      * y compris le POS principal.
@@ -248,7 +251,7 @@ export async function assignOrderPos(
     throw new Error("POS_NOT_FOUND");
   }
 
-  /*
+  /**
    * Un EMPLOYEE ne peut jamais s'assigner
    * au POS principal.
    */
@@ -257,7 +260,7 @@ export async function assignOrderPos(
     throw new Error("EMPLOYEE_CANNOT_ASSIGN_MAIN_STORE");
   }
 
-  /*
+  /**
    * On utilise une transaction :
    *
    * 1. désactiver les anciennes affectations actives
@@ -353,7 +356,6 @@ export async function getOrderProducts(
         },
       },
     },
-
     orderBy: {
       variant: {
         product: {
@@ -361,17 +363,14 @@ export async function getOrderProducts(
         },
       },
     },
-
     select: {
       id: true,
       quantity: true,
-
       variant: {
         select: {
           id: true,
           sku: true,
           price: true,
-
           product: {
             select: {
               id: true,
@@ -380,7 +379,6 @@ export async function getOrderProducts(
               image: true,
             },
           },
-
           packaging: {
             select: {
               id: true,
@@ -407,15 +405,12 @@ export async function getOrderProducts(
     products: stocks.map((stock) => ({
       variantId: stock.variant.id,
       productId: stock.variant.product.id,
-
       name: stock.variant.product.name,
       description: stock.variant.product.description,
       image: stock.variant.product.image,
       sku: stock.variant.sku,
-
       price: Number(stock.variant.price),
       quantity: stock.quantity,
-
       packaging: {
         id: stock.variant.packaging.id,
         name: stock.variant.packaging.name,
@@ -423,5 +418,94 @@ export async function getOrderProducts(
         capacityMl: stock.variant.packaging.capacityMl,
       },
     })),
+  };
+}
+
+// ============================================================
+// CLIENT
+// ============================================================
+
+export async function getOrderCustomer(
+  user: AuthenticatedUser,
+  input: GetOrderCustomerInput,
+) {
+  // ==========================================================
+  // VÉRIFIER LA BOUTIQUE
+  // ==========================================================
+
+  await getUserShop(user);
+
+  // ==========================================================
+  // RECHERCHER LE CLIENT
+  // ==========================================================
+
+  const customer = await prisma.customer.findUnique({
+    where: {
+      phone: input.phone,
+    },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      loyaltyPoints: true,
+    },
+  });
+
+  if (!customer) {
+    throw new Error("CUSTOMER_NOT_FOUND");
+  }
+
+  return {
+    customer,
+  };
+}
+
+export async function createOrderCustomer(
+  user: AuthenticatedUser,
+  input: CreateOrderCustomerInput,
+) {
+  // ==========================================================
+  // VÉRIFIER LA BOUTIQUE
+  // ==========================================================
+
+  await getUserShop(user);
+
+  // ==========================================================
+  // VÉRIFIER SI LE NUMÉRO EXISTE DÉJÀ
+  // ==========================================================
+
+  const existingCustomer = await prisma.customer.findUnique({
+    where: {
+      phone: input.phone,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (existingCustomer) {
+    throw new Error("CUSTOMER_ALREADY_EXISTS");
+  }
+
+  // ==========================================================
+  // CRÉER LE CLIENT
+  // ==========================================================
+
+  const customer = await prisma.customer.create({
+    data: {
+      name: input.name,
+      phone: input.phone,
+      loyaltyPoints: 0,
+    },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      loyaltyPoints: true,
+    },
+  });
+
+  return {
+    customer,
   };
 }
