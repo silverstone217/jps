@@ -96,6 +96,20 @@ export const validateOrderSchema = z.object({
 });
 
 // ============================================================
+// FIDÉLITÉ
+// ============================================================
+
+export const getOrderLoyaltySchema = z.object({
+  pointOfSaleId: z.string().trim().min(1, "Le point de vente est requis"),
+
+  customerId: z.string().trim().min(1, "Le client est requis"),
+
+  items: z
+    .array(orderItemSchema)
+    .min(1, "La commande doit contenir au moins un produit"),
+});
+
+// ============================================================
 // TYPES
 // ============================================================
 
@@ -114,3 +128,5 @@ export type OrderItemInput = z.infer<typeof orderItemSchema>;
 export type OrderCustomerInput = z.infer<typeof orderCustomerSchema>;
 
 export type ValidateOrderInput = z.infer<typeof validateOrderSchema>;
+
+export type GetOrderLoyaltyInput = z.infer<typeof getOrderLoyaltySchema>;

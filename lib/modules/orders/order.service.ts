@@ -6,6 +6,7 @@ import type {
   AssignOrderPosInput,
   CreateOrderCustomerInput,
   GetOrderCustomerInput,
+  GetOrderLoyaltyInput,
   GetOrderProductsInput,
 } from "./order.schema";
 
@@ -507,5 +508,150 @@ export async function createOrderCustomer(
 
   return {
     customer,
+  };
+}
+
+// ============================================================
+// FIDÉLITÉ
+// ============================================================
+
+export async function getOrderLoyalty(
+  user: AuthenticatedUser,
+  input: GetOrderLoyaltyInput,
+) {
+  const { shop, pointOfSale } = await getAuthorizedPos(
+    user,
+    input.pointOfSaleId,
+  );
+
+  const customer = await prisma.customer.findUnique({
+    where: {
+      id: input.customerId,
+    },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      loyaltyPoints: true,
+    },
+  });
+
+  if (!customer) {
+    throw new Error("CUSTOMER_NOT_FOUND");
+  }
+
+  const variantIds = input.items.map((item) => item.variantId);
+
+  const variants = await prisma.productVariant.findMany({
+    where: {
+      id: {
+        in: variantIds,
+      },
+      isActive: true,
+      product: {
+        isActive: true,
+      },
+    },
+    select: {
+      id: true,
+      price: true,
+    },
+  });
+
+  if (variants.length !== new Set(variantIds).size) {
+    throw new Error("PRODUCT_NOT_FOUND");
+  }
+
+  const priceMap = new Map(
+    variants.map((variant) => [variant.id, Number(variant.price)]),
+  );
+
+  let subtotal = 0;
+
+  for (const item of input.items) {
+    const unitPrice = priceMap.get(item.variantId);
+
+    if (unitPrice === undefined) {
+      throw new Error("PRODUCT_NOT_FOUND");
+    }
+
+    subtotal += unitPrice * item.quantity;
+  }
+
+  // ==========================================================
+  // POINTS GAGNÉS
+  // ==========================================================
+
+  const loyaltyPurchaseAmount = Number(shop.loyaltyPurchaseAmount);
+
+  const loyaltyPointsEarned = shop.loyaltyPointsEarned;
+
+  const pointsEarned =
+    loyaltyPurchaseAmount > 0
+      ? Math.floor(subtotal / loyaltyPurchaseAmount) * loyaltyPointsEarned
+      : 0;
+
+  // ==========================================================
+  // RÉDUCTION PAR POINTS
+  // ==========================================================
+
+  const loyaltyPointsForDiscount = shop.loyaltyPointsForDiscount;
+
+  const loyaltyDiscountAmount = Number(shop.loyaltyDiscountAmount);
+
+  const availablePoints = customer.loyaltyPoints;
+
+  const usablePoints =
+    loyaltyPointsForDiscount > 0
+      ? Math.floor(availablePoints / loyaltyPointsForDiscount) *
+        loyaltyPointsForDiscount
+      : 0;
+
+  const maxDiscount =
+    loyaltyDiscountAmount > 0 && loyaltyPointsForDiscount > 0
+      ? Math.floor(
+          Math.min(
+            availablePoints / loyaltyPointsForDiscount,
+            subtotal / loyaltyDiscountAmount,
+          ),
+        ) * loyaltyPointsForDiscount
+      : 0;
+
+  const maxDiscountAmount =
+    loyaltyPointsForDiscount > 0
+      ? Math.floor(maxDiscount / loyaltyPointsForDiscount) *
+        loyaltyDiscountAmount
+      : 0;
+
+  return {
+    customer: {
+      id: customer.id,
+      name: customer.name,
+      phone: customer.phone,
+      currentPoints: customer.loyaltyPoints,
+    },
+
+    order: {
+      subtotal,
+    },
+
+    earning: {
+      purchaseAmount: loyaltyPurchaseAmount,
+      points: loyaltyPointsEarned,
+      pointsEarned,
+    },
+
+    redemption: {
+      pointsRequired: loyaltyPointsForDiscount,
+      discountAmount: loyaltyDiscountAmount,
+      availablePoints,
+      usablePoints,
+      maxPointsUsable: maxDiscount,
+      maxDiscountAmount,
+    },
+
+    balance: {
+      pointsAfterPurchase: customer.loyaltyPoints + pointsEarned,
+    },
   };
 }
