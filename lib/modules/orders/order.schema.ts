@@ -1,3 +1,4 @@
+import { PaymentMethod } from "@/app/generated/prisma/client";
 import { z } from "zod";
 
 // ============================================================
@@ -75,6 +76,10 @@ export const orderCustomerSchema = z.object({
     ),
 });
 
+// ============================================================
+// VALIDATION DE LA COMMANDE
+// ============================================================
+
 export const validateOrderSchema = z.object({
   pointOfSaleId: z.string().trim().min(1, "Le point de vente est requis"),
 
@@ -90,9 +95,7 @@ export const validateOrderSchema = z.object({
     .nonnegative("Les points utilisés ne peuvent pas être négatifs")
     .default(0),
 
-  paymentMethod: z
-    .enum(["CASH", "MOBILE_MONEY", "CARD", "OTHER"])
-    .default("CASH"),
+  paymentMethod: z.enum(PaymentMethod).default(PaymentMethod.CASH),
 });
 
 // ============================================================

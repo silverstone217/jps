@@ -8,6 +8,7 @@ import type {
   GetOrderCustomerInput,
   GetOrderLoyaltyInput,
   GetOrderProductsInput,
+  ValidateOrderInput,
 } from "./order.schema";
 
 // ============================================================
@@ -519,10 +520,7 @@ export async function getOrderLoyalty(
   user: AuthenticatedUser,
   input: GetOrderLoyaltyInput,
 ) {
-  const { shop, pointOfSale } = await getAuthorizedPos(
-    user,
-    input.pointOfSaleId,
-  );
+  const { shop } = await getAuthorizedPos(user, input.pointOfSaleId);
 
   const customer = await prisma.customer.findUnique({
     where: {
@@ -654,4 +652,638 @@ export async function getOrderLoyalty(
       pointsAfterPurchase: customer.loyaltyPoints + pointsEarned,
     },
   };
+}
+
+// ============================================================
+// VALIDATION DE LA COMMANDE
+// ============================================================
+
+export async function validateOrder(
+  user: AuthenticatedUser,
+  input: ValidateOrderInput,
+) {
+  // ==========================================================
+  // AUTORISATION POS
+  // ==========================================================
+
+  const { shop, pointOfSale } = await getAuthorizedPos(
+    user,
+    input.pointOfSaleId,
+  );
+
+  // ==========================================================
+  // TRANSACTION
+  // ==========================================================
+
+  return prisma.$transaction(async (tx) => {
+    // ========================================================
+    // CLIENT
+    // ========================================================
+
+    let customer: {
+      id: string;
+      name: string | null;
+      phone: string;
+      loyaltyPoints: number;
+    } | null = null;
+
+    if (input.customer) {
+      if (input.customer.id) {
+        customer = await tx.customer.findUnique({
+          where: {
+            id: input.customer.id,
+          },
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            loyaltyPoints: true,
+          },
+        });
+
+        if (!customer) {
+          throw new Error("CUSTOMER_NOT_FOUND");
+        }
+
+        // Le téléphone doit correspondre
+        // au client identifié.
+        if (customer.phone !== input.customer.phone) {
+          throw new Error("CUSTOMER_NOT_FOUND");
+        }
+      } else {
+        customer = await tx.customer.findUnique({
+          where: {
+            phone: input.customer.phone,
+          },
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            loyaltyPoints: true,
+          },
+        });
+
+        if (!customer) {
+          throw new Error("CUSTOMER_NOT_FOUND");
+        }
+      }
+    }
+
+    // ========================================================
+    // PRODUITS / STOCK
+    // ========================================================
+
+    const variantIds = input.items.map((item) => item.variantId);
+
+    const uniqueVariantIds = new Set(variantIds);
+
+    if (uniqueVariantIds.size !== variantIds.length) {
+      throw new Error("DUPLICATE_PRODUCT");
+    }
+
+    const stocks = await tx.finishedStock.findMany({
+      where: {
+        shopId: shop.id,
+        pointOfSaleId: pointOfSale.id,
+        variantId: {
+          in: variantIds,
+        },
+        quantity: {
+          gt: 0,
+        },
+        variant: {
+          isActive: true,
+          product: {
+            isActive: true,
+          },
+        },
+      },
+      select: {
+        id: true,
+        quantity: true,
+        variant: {
+          select: {
+            id: true,
+            sku: true,
+            price: true,
+
+            product: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+
+            packaging: {
+              select: {
+                id: true,
+                name: true,
+                size: true,
+                capacityMl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (stocks.length !== uniqueVariantIds.size) {
+      throw new Error("PRODUCT_NOT_FOUND");
+    }
+
+    const stockMap = new Map(stocks.map((stock) => [stock.variant.id, stock]));
+
+    // ========================================================
+    // VÉRIFIER LES QUANTITÉS
+    // ========================================================
+
+    for (const item of input.items) {
+      const stock = stockMap.get(item.variantId);
+
+      if (!stock) {
+        throw new Error("PRODUCT_NOT_FOUND");
+      }
+
+      if (item.quantity > stock.quantity) {
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+    }
+
+    // ========================================================
+    // CALCUL DU SOUS-TOTAL
+    // ========================================================
+
+    let subtotal = 0;
+
+    for (const item of input.items) {
+      const stock = stockMap.get(item.variantId);
+
+      if (!stock) {
+        throw new Error("PRODUCT_NOT_FOUND");
+      }
+
+      const unitPrice = Number(stock.variant.price);
+
+      subtotal += unitPrice * item.quantity;
+    }
+
+    // ========================================================
+    // POINTS GAGNÉS
+    // ========================================================
+
+    const loyaltyPurchaseAmount = Number(shop.loyaltyPurchaseAmount);
+
+    const loyaltyPointsEarned = shop.loyaltyPointsEarned;
+
+    const pointsEarned =
+      customer && loyaltyPurchaseAmount > 0
+        ? Math.floor(subtotal / loyaltyPurchaseAmount) * loyaltyPointsEarned
+        : 0;
+
+    // ========================================================
+    // RÉDUCTION FIDÉLITÉ
+    // ========================================================
+
+    let pointsUsed = 0;
+    let discountAmount = 0;
+
+    if (input.pointsUsed > 0) {
+      if (!customer) {
+        throw new Error("CUSTOMER_REQUIRED_FOR_LOYALTY");
+      }
+
+      const pointsRequired = shop.loyaltyPointsForDiscount;
+
+      const discountPerBlock = Number(shop.loyaltyDiscountAmount);
+
+      if (pointsRequired <= 0 || discountPerBlock <= 0) {
+        throw new Error("LOYALTY_REDEMPTION_NOT_AVAILABLE");
+      }
+
+      // Les points doivent respecter
+      // le bloc défini par la boutique.
+      if (input.pointsUsed % pointsRequired !== 0) {
+        throw new Error("INVALID_LOYALTY_POINTS");
+      }
+
+      // Le client ne peut pas dépenser
+      // plus de points qu'il n'en possède.
+      if (input.pointsUsed > customer.loyaltyPoints) {
+        throw new Error("INSUFFICIENT_LOYALTY_POINTS");
+      }
+
+      // Limite imposée par le montant
+      // de la commande.
+      const maxPointsUsable =
+        Math.floor(subtotal / discountPerBlock) * pointsRequired;
+
+      if (input.pointsUsed > maxPointsUsable) {
+        throw new Error("LOYALTY_DISCOUNT_TOO_HIGH");
+      }
+
+      pointsUsed = input.pointsUsed;
+
+      discountAmount =
+        Math.floor(pointsUsed / pointsRequired) * discountPerBlock;
+    }
+
+    // ========================================================
+    // TOTAL
+    // ========================================================
+
+    const totalAmount = Math.max(subtotal - discountAmount, 0);
+
+    // ========================================================
+    // SOLDE FIDÉLITÉ FINAL
+    // ========================================================
+
+    const loyaltyBalanceAfter = customer
+      ? customer.loyaltyPoints - pointsUsed + pointsEarned
+      : 0;
+
+    // ========================================================
+    // VENDEUR
+    // ========================================================
+
+    const seller = await tx.user.findUnique({
+      where: {
+        id: user.id,
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    if (!seller) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    // ========================================================
+    // NUMÉRO DE REÇU
+    // ========================================================
+
+    const receiptNumber = `REC-${Date.now()}-${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, "0")}`;
+
+    // ========================================================
+    // VENTE
+    // ========================================================
+
+    const sale = await tx.sale.create({
+      data: {
+        receiptNumber,
+        pointOfSaleId: pointOfSale.id,
+        sellerId: seller.id,
+        customerId: customer?.id ?? null,
+
+        subtotal,
+        discountAmount,
+        totalAmount,
+
+        pointsEarned,
+        pointsUsed,
+
+        paymentMethod: input.paymentMethod,
+      },
+
+      select: {
+        id: true,
+        receiptNumber: true,
+        pointOfSaleId: true,
+        sellerId: true,
+        customerId: true,
+        subtotal: true,
+        discountAmount: true,
+        totalAmount: true,
+        pointsEarned: true,
+        pointsUsed: true,
+        paymentMethod: true,
+        createdAt: true,
+      },
+    });
+
+    // ========================================================
+    // LIGNES DE VENTE
+    // ========================================================
+
+    for (const item of input.items) {
+      const stock = stockMap.get(item.variantId);
+
+      if (!stock) {
+        throw new Error("PRODUCT_NOT_FOUND");
+      }
+
+      const unitPrice = Number(stock.variant.price);
+
+      await tx.saleItem.create({
+        data: {
+          saleId: sale.id,
+          variantId: stock.variant.id,
+          quantity: item.quantity,
+          unitPrice,
+          subtotal: unitPrice * item.quantity,
+        },
+      });
+    }
+
+    // ========================================================
+    // DÉCRÉMENT DU STOCK
+    // ========================================================
+
+    for (const item of input.items) {
+      const stock = stockMap.get(item.variantId);
+
+      if (!stock) {
+        throw new Error("PRODUCT_NOT_FOUND");
+      }
+
+      const updated = await tx.finishedStock.updateMany({
+        where: {
+          id: stock.id,
+          quantity: {
+            gte: item.quantity,
+          },
+        },
+
+        data: {
+          quantity: {
+            decrement: item.quantity,
+          },
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+    }
+
+    // ========================================================
+    // FIDÉLITÉ
+    // ========================================================
+
+    if (customer) {
+      // ------------------------------------------------------
+      // EARN
+      // ------------------------------------------------------
+
+      if (pointsEarned > 0) {
+        await tx.loyaltyTransaction.create({
+          data: {
+            customerId: customer.id,
+            saleId: sale.id,
+            type: "EARN",
+            points: pointsEarned,
+            balanceAfter: loyaltyBalanceAfter,
+            reason: "Points gagnés lors de la vente",
+          },
+        });
+      }
+
+      // ------------------------------------------------------
+      // REDEEM
+      // ------------------------------------------------------
+
+      if (pointsUsed > 0) {
+        await tx.loyaltyTransaction.create({
+          data: {
+            customerId: customer.id,
+            saleId: sale.id,
+            type: "REDEEM",
+            points: pointsUsed,
+            balanceAfter: loyaltyBalanceAfter,
+            reason: "Points utilisés lors de la vente",
+          },
+        });
+      }
+
+      // ------------------------------------------------------
+      // NOUVEAU SOLDE
+      // ------------------------------------------------------
+
+      await tx.customer.update({
+        where: {
+          id: customer.id,
+        },
+
+        data: {
+          loyaltyPoints: loyaltyBalanceAfter,
+        },
+      });
+    }
+
+    // ========================================================
+    // FACTURE
+    // ========================================================
+
+    const invoiceNumber = `FAC-${Date.now()}-${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, "0")}`;
+
+    const invoice = await tx.invoice.create({
+      data: {
+        saleId: sale.id,
+
+        invoiceNumber,
+
+        status: "GENERATED",
+
+        // --------------------------------------------------
+        // SNAPSHOT BOUTIQUE
+        // --------------------------------------------------
+
+        shopName: shop.name,
+
+        // --------------------------------------------------
+        // SNAPSHOT POS
+        // --------------------------------------------------
+
+        pointOfSaleName: pointOfSale.name,
+
+        pointOfSaleAddress: pointOfSale.address,
+
+        pointOfSaleTelephone: pointOfSale.telephone,
+
+        // --------------------------------------------------
+        // SNAPSHOT VENDEUR
+        // --------------------------------------------------
+
+        sellerName: seller.name,
+
+        // --------------------------------------------------
+        // SNAPSHOT FACTURE
+        // --------------------------------------------------
+
+        currency: shop.currency,
+
+        subtotal,
+        discountAmount,
+        totalAmount,
+
+        // --------------------------------------------------
+        // SNAPSHOT CLIENT
+        // --------------------------------------------------
+
+        customerName: customer?.name ?? null,
+
+        customerPhone: customer?.phone ?? null,
+      },
+
+      select: {
+        id: true,
+        invoiceNumber: true,
+        status: true,
+        currency: true,
+
+        shopName: true,
+
+        pointOfSaleName: true,
+        pointOfSaleAddress: true,
+        pointOfSaleTelephone: true,
+
+        subtotal: true,
+        discountAmount: true,
+        totalAmount: true,
+
+        customerName: true,
+        customerPhone: true,
+
+        createdAt: true,
+      },
+    });
+
+    // ========================================================
+    // LIGNES DE FACTURE
+    // ========================================================
+
+    const invoiceItems = await Promise.all(
+      input.items.map(async (item) => {
+        const stock = stockMap.get(item.variantId);
+
+        if (!stock) {
+          throw new Error("PRODUCT_NOT_FOUND");
+        }
+
+        const unitPrice = Number(stock.variant.price);
+
+        const itemSubtotal = unitPrice * item.quantity;
+
+        return tx.invoiceItem.create({
+          data: {
+            invoiceId: invoice.id,
+
+            productName: stock.variant.product.name,
+
+            size: stock.variant.packaging.size,
+
+            quantity: item.quantity,
+
+            unitPrice,
+
+            subtotal: itemSubtotal,
+
+            currency: shop.currency,
+          },
+
+          select: {
+            id: true,
+            productName: true,
+            size: true,
+            quantity: true,
+            unitPrice: true,
+            subtotal: true,
+            currency: true,
+          },
+        });
+      }),
+    );
+
+    // ========================================================
+    // RÉSULTAT CLIENT
+    // ========================================================
+
+    const updatedCustomer = customer
+      ? {
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+          loyaltyPoints: loyaltyBalanceAfter,
+        }
+      : null;
+
+    // ========================================================
+    // RÉPONSE
+    // ========================================================
+
+    return {
+      sale: {
+        id: sale.id,
+
+        receiptNumber: sale.receiptNumber,
+
+        pointOfSaleId: sale.pointOfSaleId,
+
+        sellerId: sale.sellerId,
+
+        customerId: sale.customerId,
+
+        subtotal: Number(sale.subtotal),
+
+        discountAmount: Number(sale.discountAmount),
+
+        totalAmount: Number(sale.totalAmount),
+
+        pointsEarned: sale.pointsEarned,
+
+        pointsUsed: sale.pointsUsed,
+
+        paymentMethod: sale.paymentMethod,
+
+        createdAt: sale.createdAt.toISOString(),
+      },
+
+      invoice: {
+        id: invoice.id,
+
+        invoiceNumber: invoice.invoiceNumber,
+
+        status: invoice.status,
+
+        currency: invoice.currency,
+
+        shopName: invoice.shopName,
+
+        pointOfSaleName: invoice.pointOfSaleName,
+
+        pointOfSaleAddress: invoice.pointOfSaleAddress,
+
+        pointOfSaleTelephone: invoice.pointOfSaleTelephone,
+
+        subtotal: Number(invoice.subtotal),
+
+        discountAmount: Number(invoice.discountAmount),
+
+        totalAmount: Number(invoice.totalAmount),
+
+        customerName: invoice.customerName,
+
+        customerPhone: invoice.customerPhone,
+
+        createdAt: invoice.createdAt.toISOString(),
+
+        items: invoiceItems.map((item) => ({
+          id: item.id,
+          productName: item.productName,
+          size: item.size,
+          quantity: item.quantity,
+          unitPrice: Number(item.unitPrice),
+          subtotal: Number(item.subtotal),
+          currency: item.currency,
+        })),
+      },
+
+      customer: updatedCustomer,
+    };
+  });
 }

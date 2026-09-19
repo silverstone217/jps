@@ -849,9 +849,12 @@ model LoyaltyTransaction {
 // ======================================================
 
 model Invoice {
-  id     String @id @default(cuid())
-  // Référence technique vers la vente d'origine.
-  // La facture reste indépendante de ses données.
+  id String @id @default(cuid())
+
+  // ======================================================
+  // RÉFÉRENCE TECHNIQUE VERS LA VENTE
+  // ======================================================
+
   saleId String @unique
 
   invoiceNumber  String                 @unique
@@ -860,6 +863,33 @@ model Invoice {
 
   whatsappSentAt DateTime?
   printedAt      DateTime?
+
+  // ======================================================
+  // SNAPSHOT DE LA BOUTIQUE
+  // ======================================================
+
+  // Nom de la boutique au moment de la création
+  // de la facture.
+  shopName String
+
+  // Logo snapshoté pourra être ajouté plus tard.
+  // shopLogo String?
+
+  // ======================================================
+  // SNAPSHOT DU POINT DE VENTE
+  // ======================================================
+
+  // Nom du PDV affiché sur la facture.
+  pointOfSaleName String
+
+  // Adresse et téléphone du PDV au moment
+  pointOfSaleAddress   String?
+  pointOfSaleTelephone String?
+
+  // ======================================================
+  // SNAPSHOT DU VENDEUR
+  // ======================================================
+  sellerName String
 
   // ======================================================
   // SNAPSHOT DE LA FACTURE
@@ -878,7 +908,7 @@ model Invoice {
   customerPhone String?
 
   // ======================================================
-  // DATES
+  // DATE
   // ======================================================
 
   createdAt DateTime @default(now())
@@ -887,7 +917,8 @@ model Invoice {
   // RELATIONS
   // ======================================================
 
-  sale  Sale          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
   items InvoiceItem[]
 
   @@index([createdAt])
