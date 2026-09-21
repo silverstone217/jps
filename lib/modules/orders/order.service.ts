@@ -1119,7 +1119,6 @@ export async function validateOrder(
         // --------------------------------------------------
 
         customerName: customer?.name ?? null,
-
         customerPhone: customer?.phone ?? null,
       },
 
