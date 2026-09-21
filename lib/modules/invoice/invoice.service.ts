@@ -1,7 +1,5 @@
 import { Prisma } from "@/app/generated/prisma/client";
-
 import { prisma } from "@/lib/prisma";
-
 import type { InvoiceData, InvoiceFilterInput } from "./invoice.schema";
 
 // ======================================================
@@ -17,13 +15,12 @@ const MAIN_SHOP_SINGLETON = "MAIN";
 const invoiceSelect = {
   id: true,
   saleId: true,
-
   invoiceNumber: true,
   status: true,
-
   deliveryMethod: true,
   whatsappSentAt: true,
   printedAt: true,
+  paymentMethod: true,
 
   // ----------------------------------------------------
   // SNAPSHOT BOUTIQUE
@@ -82,6 +79,7 @@ const invoiceSelect = {
     orderBy: {
       id: "asc",
     },
+
     select: {
       id: true,
       invoiceId: true,
@@ -104,6 +102,7 @@ async function getMainShop() {
     where: {
       singleton: MAIN_SHOP_SINGLETON,
     },
+
     select: {
       id: true,
     },
@@ -173,7 +172,7 @@ function getDateRange(
 
       // Dimanche = 0
       // Lundi = 1
-      //
+
       // On considère le lundi comme
       // premier jour de la semaine.
 
@@ -230,9 +229,11 @@ function mapInvoice(
 ): InvoiceData {
   return {
     id: invoice.id,
+
     saleId: invoice.saleId,
 
     invoiceNumber: invoice.invoiceNumber,
+
     status: invoice.status,
 
     deliveryMethod: invoice.deliveryMethod,
@@ -273,12 +274,10 @@ function mapInvoice(
     // FACTURE
     // ==================================================
 
+    paymentMethod: invoice.paymentMethod,
     currency: invoice.currency,
-
     subtotal: Number(invoice.subtotal),
-
     discountAmount: Number(invoice.discountAmount),
-
     totalAmount: Number(invoice.totalAmount),
 
     // ==================================================
@@ -287,7 +286,6 @@ function mapInvoice(
 
     loyalty: {
       pointsEarned: invoice.pointsEarned,
-
       pointsUsed: invoice.pointsUsed,
     },
 
@@ -315,15 +313,10 @@ function mapInvoice(
       invoiceId: item.invoiceId,
 
       productName: item.productName,
-
       size: item.size,
-
       quantity: item.quantity,
-
       unitPrice: Number(item.unitPrice),
-
       subtotal: Number(item.subtotal),
-
       currency: item.currency,
     })),
   };
@@ -393,6 +386,18 @@ export async function getInvoices(
           createdAt: {
             gte: dateRange.start,
             lt: dateRange.end,
+          },
+        }
+      : {}),
+
+    // --------------------------------------------------
+    // FILTRE NUMÉRO CLIENT
+    // --------------------------------------------------
+
+    ...(filters.customerPhone
+      ? {
+          customerPhone: {
+            contains: filters.customerPhone,
           },
         }
       : {}),

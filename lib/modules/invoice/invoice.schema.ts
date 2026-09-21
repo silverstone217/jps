@@ -3,6 +3,7 @@ import type {
   Currency,
   InvoiceDeliveryMethod,
   InvoiceStatus,
+  PaymentMethod,
 } from "@/app/generated/prisma/client";
 
 import { z } from "zod";
@@ -39,7 +40,14 @@ export const invoiceFilterSchema = z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "La date doit être au format YYYY-MM-DD.")
       .optional(),
+
+    customerPhone: z.string().trim().optional(),
   })
+
+  // ----------------------------------------------------------
+  // MIN / MAX
+  // ----------------------------------------------------------
+
   .refine(
     (data) =>
       data.minAmount === undefined ||
@@ -51,6 +59,11 @@ export const invoiceFilterSchema = z
       path: ["maxAmount"],
     },
   )
+
+  // ----------------------------------------------------------
+  // PÉRIODE / DATE
+  // ----------------------------------------------------------
+
   .refine((data) => data.period === undefined || data.date !== undefined, {
     message: "Une date est requise lorsqu'une période est sélectionnée.",
     path: ["date"],
@@ -65,17 +78,26 @@ export type InvoiceFilterInput = z.infer<typeof invoiceFilterSchema>;
 export interface InvoiceData {
   id: string;
   saleId: string;
-
   invoiceNumber: string;
+
   status: InvoiceStatus;
 
   deliveryMethod: InvoiceDeliveryMethod | null;
+
   whatsappSentAt: string | null;
   printedAt: string | null;
+
+  // ==========================================================
+  // BOUTIQUE
+  // ==========================================================
 
   shop: {
     name: string;
   };
+
+  // ==========================================================
+  // POINT DE VENTE
+  // ==========================================================
 
   pointOfSale: {
     name: string;
@@ -83,27 +105,55 @@ export interface InvoiceData {
     telephone: string | null;
   };
 
+  // ==========================================================
+  // VENDEUR
+  // ==========================================================
+
   seller: {
     name: string;
   };
 
+  // ==========================================================
+  // FACTURE
+  // ==========================================================
+
+  paymentMethod: PaymentMethod;
+
   currency: Currency;
 
   subtotal: number;
+
   discountAmount: number;
+
   totalAmount: number;
+
+  // ==========================================================
+  // FIDÉLITÉ
+  // ==========================================================
 
   loyalty: {
     pointsEarned: number;
     pointsUsed: number;
   };
 
+  // ==========================================================
+  // CLIENT
+  // ==========================================================
+
   customer: {
     name: string | null;
     phone: string | null;
   };
 
+  // ==========================================================
+  // DATE
+  // ==========================================================
+
   createdAt: string;
+
+  // ==========================================================
+  // ARTICLES
+  // ==========================================================
 
   items: InvoiceItemData[];
 }
@@ -113,11 +163,13 @@ export interface InvoiceItemData {
   invoiceId: string;
 
   productName: string;
+
   size: BottleSize;
 
   quantity: number;
 
   unitPrice: number;
+
   subtotal: number;
 
   currency: Currency;

@@ -894,11 +894,11 @@ model Invoice {
   // ======================================================
   // SNAPSHOT DE LA FACTURE
   // ======================================================
-
+  paymentMethod  PaymentMethod @default(CASH)
   currency       Currency
-  subtotal       Decimal  @db.Decimal(14, 2)
-  discountAmount Decimal  @default(0) @db.Decimal(14, 2)
-  totalAmount    Decimal  @db.Decimal(14, 2)
+  subtotal       Decimal       @db.Decimal(14, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal       @db.Decimal(14, 2)
 
   pointsEarned Int @default(0)
   pointsUsed   Int @default(0)

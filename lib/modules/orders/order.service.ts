@@ -1134,6 +1134,8 @@ export async function validateOrder(
         pointOfSaleAddress: true,
         pointOfSaleTelephone: true,
 
+        paymentMethod: true,
+
         subtotal: true,
         discountAmount: true,
         totalAmount: true,
@@ -1241,27 +1243,20 @@ export async function validateOrder(
         id: invoice.id,
 
         invoiceNumber: invoice.invoiceNumber,
-
         status: invoice.status,
-
         currency: invoice.currency,
-
         shopName: invoice.shopName,
 
         pointOfSaleName: invoice.pointOfSaleName,
-
         pointOfSaleAddress: invoice.pointOfSaleAddress,
-
         pointOfSaleTelephone: invoice.pointOfSaleTelephone,
 
         subtotal: Number(invoice.subtotal),
-
+        paymentMethod: invoice.paymentMethod,
         discountAmount: Number(invoice.discountAmount),
-
         totalAmount: Number(invoice.totalAmount),
 
         customerName: invoice.customerName,
-
         customerPhone: invoice.customerPhone,
         pointsEarned: invoice.pointsEarned,
         pointsUsed: invoice.pointsUsed,
