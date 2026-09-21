@@ -41,7 +41,20 @@ export async function POST(request: Request) {
       parsed.data,
     );
 
-    return Response.json(result, { status: 201 });
+    // ==========================================================
+    // SUCCÈS
+    // ==========================================================
+
+    return Response.json(
+      {
+        ...result,
+
+        // Identifiants utiles au client
+        orderId: result.sale.id,
+        invoiceId: result.invoice.id,
+      },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Erreur validation commande :", error);
 
