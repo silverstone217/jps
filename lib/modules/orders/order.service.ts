@@ -1111,6 +1111,9 @@ export async function validateOrder(
         discountAmount,
         totalAmount,
 
+        pointsEarned,
+        pointsUsed,
+
         // --------------------------------------------------
         // SNAPSHOT CLIENT
         // --------------------------------------------------
@@ -1138,6 +1141,8 @@ export async function validateOrder(
 
         customerName: true,
         customerPhone: true,
+        pointsEarned: true,
+        pointsUsed: true,
 
         createdAt: true,
       },
@@ -1259,6 +1264,8 @@ export async function validateOrder(
         customerName: invoice.customerName,
 
         customerPhone: invoice.customerPhone,
+        pointsEarned: invoice.pointsEarned,
+        pointsUsed: invoice.pointsUsed,
 
         createdAt: invoice.createdAt.toISOString(),
 
