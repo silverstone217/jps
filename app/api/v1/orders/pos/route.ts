@@ -87,8 +87,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return Response.json(
         {
-          message: "Données invalides.",
-          errors: parsed.error.flatten().fieldErrors,
+          message: parsed.error.issues.map((issue) => issue.message).join(" "),
         },
         {
           status: 400,

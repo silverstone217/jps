@@ -32,64 +32,35 @@ type OrderPos = {
 };
 
 // ============================================================
-// SHOP
+// RÉCUPÉRER LA BOUTIQUE DE L'UTILISATEUR
 // ============================================================
 
 async function getUserShop(user: AuthenticatedUser) {
-  /**
-   * Un MANAGER propriétaire est relié directement au Shop
-   * via Shop.ownerId.
-   *
-   * Un EMPLOYEE est relié au Shop via StaffAssignment.
-   *
-   * On cherche donc d'abord le shop via une affectation active.
-   * Cela permet aussi de fonctionner correctement si un manager
-   * possède une affectation à un POS.
-   */
-
-  const assignment = await prisma.staffAssignment.findFirst({
+  const shop = await prisma.shop.findUnique({
     where: {
-      userId: user.id,
-      isActive: true,
-    },
-    select: {
-      shopId: true,
+      singleton: "MAIN",
     },
   });
 
-  if (assignment) {
-    const shop = await prisma.shop.findUnique({
-      where: {
-        id: assignment.shopId,
-      },
-    });
-
-    if (shop) {
-      return shop;
-    }
+  if (!shop) {
+    throw new Error("SHOP_NOT_FOUND");
   }
 
-  /**
-   * Si aucune affectation n'existe, un MANAGER peut encore
-   * retrouver son shop via ownerId.
-   *
-   * C'est notamment nécessaire pour permettre au manager
-   * de choisir son premier POS.
-   */
+  // ==========================================================
+  // MANAGER
+  // ==========================================================
 
   if (user.role === "MANAGER") {
-    const shop = await prisma.shop.findUnique({
-      where: {
-        ownerId: user.id,
-      },
-    });
-
-    if (shop) {
-      return shop;
+    if (shop.ownerId !== user.id) {
+      throw new Error("SHOP_NOT_FOUND");
     }
   }
 
-  throw new Error("SHOP_NOT_FOUND");
+  // ==========================================================
+  // EMPLOYEE
+  // ==========================================================
+
+  return shop;
 }
 
 // ============================================================
@@ -152,7 +123,7 @@ async function getAuthorizedPos(
 }
 
 // ============================================================
-// POS DISPONIBLES
+// POS DISPONIBLES POUR LES COMMANDES
 // ============================================================
 
 export async function getOrderPos(
@@ -161,11 +132,16 @@ export async function getOrderPos(
   const shop = await getUserShop(user);
 
   const [pointOfSales, assignments] = await Promise.all([
+    // --------------------------------------------------------
+    // Tous les POS actifs de la boutique
+    // --------------------------------------------------------
+
     prisma.pointOfSale.findMany({
       where: {
         shopId: shop.id,
         isActive: true,
       },
+
       orderBy: [
         {
           isMainStore: "desc",
@@ -174,6 +150,7 @@ export async function getOrderPos(
           name: "asc",
         },
       ],
+
       select: {
         id: true,
         name: true,
@@ -184,12 +161,17 @@ export async function getOrderPos(
       },
     }),
 
+    // --------------------------------------------------------
+    // Affectations actives de l'utilisateur
+    // --------------------------------------------------------
+
     prisma.staffAssignment.findMany({
       where: {
         userId: user.id,
         shopId: shop.id,
         isActive: true,
       },
+
       select: {
         pointOfSaleId: true,
       },
@@ -200,25 +182,33 @@ export async function getOrderPos(
     assignments.map((assignment) => assignment.pointOfSaleId),
   );
 
+  // ==========================================================
+  // CONSTRUIRE LA RÉPONSE
+  // ==========================================================
+
   return pointOfSales.map((pointOfSale) => {
     const isAssigned = assignedPosIds.has(pointOfSale.id);
 
-    /**
-     * MANAGER :
-     * peut choisir tous les POS actifs,
-     * y compris le POS principal.
-     *
-     * EMPLOYEE :
-     * le POS principal est interdit.
-     * Les autres POS sont sélectionnables.
-     */
+    // ------------------------------------------------------
+    // MANAGER
+    // ------------------------------------------------------
 
-    const canSelect = user.role === "MANAGER" ? true : !pointOfSale.isMainStore;
+    if (user.role === "MANAGER") {
+      return {
+        ...pointOfSale,
+        isAssigned,
+        canSelect: true,
+      };
+    }
+
+    // ------------------------------------------------------
+    // EMPLOYEE
+    // ------------------------------------------------------
 
     return {
       ...pointOfSale,
       isAssigned,
-      canSelect,
+      canSelect: !pointOfSale.isMainStore,
     };
   });
 }
