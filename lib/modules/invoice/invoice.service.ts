@@ -229,15 +229,10 @@ function mapInvoice(
 ): InvoiceData {
   return {
     id: invoice.id,
-
     saleId: invoice.saleId,
-
     invoiceNumber: invoice.invoiceNumber,
-
     status: invoice.status,
-
     deliveryMethod: invoice.deliveryMethod,
-
     whatsappSentAt: invoice.whatsappSentAt
       ? invoice.whatsappSentAt.toISOString()
       : null,

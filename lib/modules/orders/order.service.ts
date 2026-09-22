@@ -667,6 +667,12 @@ export async function validateOrder(
 
   return prisma.$transaction(async (tx) => {
     // ========================================================
+    // DATE ACTUELLE
+    // ========================================================
+
+    const now = new Date();
+
+    // ========================================================
     // CLIENT
     // ========================================================
 
@@ -731,26 +737,33 @@ export async function validateOrder(
       throw new Error("DUPLICATE_PRODUCT");
     }
 
+    // --------------------------------------------------------
+    // STOCK AGRÉGÉ DU PDV
+    // --------------------------------------------------------
+
     const stocks = await tx.finishedStock.findMany({
       where: {
         shopId: shop.id,
+
         pointOfSaleId: pointOfSale.id,
+
         variantId: {
           in: variantIds,
         },
-        quantity: {
-          gt: 0,
-        },
+
         variant: {
           isActive: true,
+
           product: {
             isActive: true,
           },
         },
       },
+
       select: {
         id: true,
         quantity: true,
+
         variant: {
           select: {
             id: true,
@@ -784,7 +797,98 @@ export async function validateOrder(
     const stockMap = new Map(stocks.map((stock) => [stock.variant.id, stock]));
 
     // ========================================================
-    // VÉRIFIER LES QUANTITÉS
+    // LOTS DISPONIBLES
+    // ========================================================
+    //
+    // IMPORTANT :
+    //
+    // FinishedStock.quantity
+    //      ↓
+    // stock total actuel
+    //
+    // FinishedStockLot.remainingQuantity
+    //      ↓
+    // détail réel du stock par lot
+    //
+    // Les FinishedStockEntry ne sont PAS modifiées :
+    // elles représentent l'historique des entrées.
+    //
+    // ProductionItem.remainingQuantity n'est PAS modifié
+    // par une vente.
+    //
+    // ========================================================
+
+    const stockIds = stocks.map((stock) => stock.id);
+
+    const lots = await tx.finishedStockLot.findMany({
+      where: {
+        finishedStockId: {
+          in: stockIds,
+        },
+
+        remainingQuantity: {
+          gt: 0,
+        },
+
+        // Un lot sans date d'expiration
+        // reste vendable.
+        //
+        // Un lot expiré n'est jamais vendu.
+        OR: [
+          {
+            expiresAt: null,
+          },
+          {
+            expiresAt: {
+              gt: now,
+            },
+          },
+        ],
+      },
+
+      // FIFO :
+      //
+      // 1. expire le plus tôt
+      // 2. à expiration identique,
+      //    entrée la plus ancienne
+      orderBy: [
+        {
+          expiresAt: "asc",
+        },
+        {
+          createdAt: "asc",
+        },
+      ],
+
+      select: {
+        id: true,
+        finishedStockId: true,
+        entryId: true,
+        quantity: true,
+        remainingQuantity: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    });
+
+    // ========================================================
+    // INDEX DES LOTS PAR FINISHED STOCK
+    // ========================================================
+
+    const lotsByStockId = new Map<string, typeof lots>();
+
+    for (const lot of lots) {
+      const currentLots = lotsByStockId.get(lot.finishedStockId);
+
+      if (currentLots) {
+        currentLots.push(lot);
+      } else {
+        lotsByStockId.set(lot.finishedStockId, [lot]);
+      }
+    }
+
+    // ========================================================
+    // VÉRIFIER LES QUANTITÉS DISPONIBLES
     // ========================================================
 
     for (const item of input.items) {
@@ -794,7 +898,33 @@ export async function validateOrder(
         throw new Error("PRODUCT_NOT_FOUND");
       }
 
+      // ------------------------------------------------------
+      // 1. Vérification du stock agrégé
+      // ------------------------------------------------------
+
       if (item.quantity > stock.quantity) {
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+
+      // ------------------------------------------------------
+      // 2. Vérification du stock réellement disponible
+      //    dans les lots non expirés.
+      // ------------------------------------------------------
+
+      const availableLots = lotsByStockId.get(stock.id) ?? [];
+
+      const availableLotQuantity = availableLots.reduce(
+        (total, lot) => total + lot.remainingQuantity,
+        0,
+      );
+
+      if (availableLotQuantity < item.quantity) {
+        // Le stock agrégé peut être > 0
+        // alors que les lots sont expirés.
+        if (availableLotQuantity === 0) {
+          throw new Error("PRODUCT_EXPIRED");
+        }
+
         throw new Error("INSUFFICIENT_STOCK");
       }
     }
@@ -899,6 +1029,7 @@ export async function validateOrder(
       where: {
         id: user.id,
       },
+
       select: {
         id: true,
         name: true,
@@ -924,15 +1055,21 @@ export async function validateOrder(
     const sale = await tx.sale.create({
       data: {
         receiptNumber,
+
         pointOfSaleId: pointOfSale.id,
+
         sellerId: seller.id,
+
         customerId: customer?.id ?? null,
 
         subtotal,
+
         discountAmount,
+
         totalAmount,
 
         pointsEarned,
+
         pointsUsed,
 
         paymentMethod: input.paymentMethod,
@@ -970,9 +1107,13 @@ export async function validateOrder(
       await tx.saleItem.create({
         data: {
           saleId: sale.id,
+
           variantId: stock.variant.id,
+
           quantity: item.quantity,
+
           unitPrice,
+
           subtotal: unitPrice * item.quantity,
         },
       });
@@ -980,6 +1121,26 @@ export async function validateOrder(
 
     // ========================================================
     // DÉCRÉMENT DU STOCK
+    // ========================================================
+    //
+    // Pour chaque produit :
+    //
+    // FinishedStock.quantity
+    //          ↓
+    // décrément global
+    //
+    // FinishedStockLot.remainingQuantity
+    //          ↓
+    // décrément FIFO
+    //
+    // FinishedStockEntry
+    //          ↓
+    // NE BOUGE PAS
+    //
+    // ProductionItem
+    //          ↓
+    // NE BOUGE PAS
+    //
     // ========================================================
 
     for (const item of input.items) {
@@ -989,9 +1150,100 @@ export async function validateOrder(
         throw new Error("PRODUCT_NOT_FOUND");
       }
 
-      const updated = await tx.finishedStock.updateMany({
+      let quantityToConsume = item.quantity;
+
+      const availableLots = lotsByStockId.get(stock.id) ?? [];
+
+      // ------------------------------------------------------
+      // CONSOMMATION FIFO DES LOTS
+      // ------------------------------------------------------
+
+      for (const lot of availableLots) {
+        if (quantityToConsume <= 0) {
+          break;
+        }
+
+        const quantityFromLot = Math.min(
+          quantityToConsume,
+          lot.remainingQuantity,
+        );
+
+        if (quantityFromLot <= 0) {
+          continue;
+        }
+
+        // ----------------------------------------------------
+        // DÉCRÉMENT ATOMIQUE DU LOT
+        // ----------------------------------------------------
+        //
+        // Le gte protège contre une vente concurrente.
+        //
+        // Exemple :
+        //
+        // lot = 4
+        //
+        // vente A prend 3
+        // vente B veut prendre 2
+        //
+        // après A :
+        // lot = 1
+        //
+        // B ne pourra pas décrémenter 2.
+        //
+        // ----------------------------------------------------
+
+        const updatedLot = await tx.finishedStockLot.updateMany({
+          where: {
+            id: lot.id,
+
+            remainingQuantity: {
+              gte: quantityFromLot,
+            },
+
+            // Le lot doit toujours être valide
+            // au moment exact de la vente.
+            OR: [
+              {
+                expiresAt: null,
+              },
+              {
+                expiresAt: {
+                  gt: now,
+                },
+              },
+            ],
+          },
+
+          data: {
+            remainingQuantity: {
+              decrement: quantityFromLot,
+            },
+          },
+        });
+
+        if (updatedLot.count !== 1) {
+          throw new Error("INSUFFICIENT_STOCK");
+        }
+
+        quantityToConsume -= quantityFromLot;
+      }
+
+      // ------------------------------------------------------
+      // SÉCURITÉ
+      // ------------------------------------------------------
+
+      if (quantityToConsume > 0) {
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+
+      // ------------------------------------------------------
+      // DÉCRÉMENT DU STOCK AGRÉGÉ
+      // ------------------------------------------------------
+
+      const updatedStock = await tx.finishedStock.updateMany({
         where: {
           id: stock.id,
+
           quantity: {
             gte: item.quantity,
           },
@@ -1004,7 +1256,7 @@ export async function validateOrder(
         },
       });
 
-      if (updated.count !== 1) {
+      if (updatedStock.count !== 1) {
         throw new Error("INSUFFICIENT_STOCK");
       }
     }
@@ -1022,10 +1274,15 @@ export async function validateOrder(
         await tx.loyaltyTransaction.create({
           data: {
             customerId: customer.id,
+
             saleId: sale.id,
+
             type: "EARN",
+
             points: pointsEarned,
+
             balanceAfter: loyaltyBalanceAfter,
+
             reason: "Points gagnés lors de la vente",
           },
         });
@@ -1039,10 +1296,17 @@ export async function validateOrder(
         await tx.loyaltyTransaction.create({
           data: {
             customerId: customer.id,
+
             saleId: sale.id,
+
             type: "REDEEM",
+
+            // On conserve ta logique actuelle :
+            // les points utilisés sont positifs.
             points: pointsUsed,
+
             balanceAfter: loyaltyBalanceAfter,
+
             reason: "Points utilisés lors de la vente",
           },
         });
@@ -1105,13 +1369,18 @@ export async function validateOrder(
         // SNAPSHOT FACTURE
         // --------------------------------------------------
 
+        paymentMethod: input.paymentMethod,
+
         currency: shop.currency,
 
         subtotal,
+
         discountAmount,
+
         totalAmount,
 
         pointsEarned,
+
         pointsUsed,
 
         // --------------------------------------------------
@@ -1119,6 +1388,7 @@ export async function validateOrder(
         // --------------------------------------------------
 
         customerName: customer?.name ?? null,
+
         customerPhone: customer?.phone ?? null,
       },
 
@@ -1127,24 +1397,19 @@ export async function validateOrder(
         invoiceNumber: true,
         status: true,
         currency: true,
-
         shopName: true,
-
         pointOfSaleName: true,
         pointOfSaleAddress: true,
         pointOfSaleTelephone: true,
-
+        sellerName: true,
         paymentMethod: true,
-
         subtotal: true,
         discountAmount: true,
         totalAmount: true,
-
         customerName: true,
         customerPhone: true,
         pointsEarned: true,
         pointsUsed: true,
-
         createdAt: true,
       },
     });
@@ -1243,33 +1508,52 @@ export async function validateOrder(
         id: invoice.id,
 
         invoiceNumber: invoice.invoiceNumber,
+
         status: invoice.status,
+
         currency: invoice.currency,
+
         shopName: invoice.shopName,
 
         pointOfSaleName: invoice.pointOfSaleName,
+
         pointOfSaleAddress: invoice.pointOfSaleAddress,
+
         pointOfSaleTelephone: invoice.pointOfSaleTelephone,
 
+        sellerName: invoice.sellerName,
+
         subtotal: Number(invoice.subtotal),
+
         paymentMethod: invoice.paymentMethod,
+
         discountAmount: Number(invoice.discountAmount),
+
         totalAmount: Number(invoice.totalAmount),
 
         customerName: invoice.customerName,
+
         customerPhone: invoice.customerPhone,
+
         pointsEarned: invoice.pointsEarned,
+
         pointsUsed: invoice.pointsUsed,
 
         createdAt: invoice.createdAt.toISOString(),
 
         items: invoiceItems.map((item) => ({
           id: item.id,
+
           productName: item.productName,
+
           size: item.size,
+
           quantity: item.quantity,
+
           unitPrice: Number(item.unitPrice),
+
           subtotal: Number(item.subtotal),
+
           currency: item.currency,
         })),
       },
