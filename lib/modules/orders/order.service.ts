@@ -737,23 +737,19 @@ export async function validateOrder(
       throw new Error("DUPLICATE_PRODUCT");
     }
 
-    // --------------------------------------------------------
+    // ========================================================
     // STOCK AGRÉGÉ DU PDV
-    // --------------------------------------------------------
+    // ========================================================
 
     const stocks = await tx.finishedStock.findMany({
       where: {
         shopId: shop.id,
-
         pointOfSaleId: pointOfSale.id,
-
         variantId: {
           in: variantIds,
         },
-
         variant: {
           isActive: true,
-
           product: {
             isActive: true,
           },
@@ -797,24 +793,24 @@ export async function validateOrder(
     const stockMap = new Map(stocks.map((stock) => [stock.variant.id, stock]));
 
     // ========================================================
-    // LOTS DISPONIBLES
+    // LOTS AVEC STOCK RESTANT
     // ========================================================
     //
     // IMPORTANT :
     //
-    // FinishedStock.quantity
-    //      ↓
-    // stock total actuel
+    // On récupère TOUS les lots ayant
+    // remainingQuantity > 0.
     //
-    // FinishedStockLot.remainingQuantity
-    //      ↓
-    // détail réel du stock par lot
+    // On ne filtre PAS expiresAt ici.
     //
-    // Les FinishedStockEntry ne sont PAS modifiées :
-    // elles représentent l'historique des entrées.
+    // Cela permet de distinguer :
     //
-    // ProductionItem.remainingQuantity n'est PAS modifié
-    // par une vente.
+    // 1. lots valides
+    // 2. lots expirés
+    // 3. aucun lot
+    //
+    // Sinon un stock sans lot pourrait être
+    // interprété à tort comme PRODUCT_EXPIRED.
     //
     // ========================================================
 
@@ -829,28 +825,13 @@ export async function validateOrder(
         remainingQuantity: {
           gt: 0,
         },
-
-        // Un lot sans date d'expiration
-        // reste vendable.
-        //
-        // Un lot expiré n'est jamais vendu.
-        OR: [
-          {
-            expiresAt: null,
-          },
-          {
-            expiresAt: {
-              gt: now,
-            },
-          },
-        ],
       },
 
       // FIFO :
       //
-      // 1. expire le plus tôt
-      // 2. à expiration identique,
-      //    entrée la plus ancienne
+      // 1. expiration la plus proche
+      // 2. entrée la plus ancienne
+
       orderBy: [
         {
           expiresAt: "asc",
@@ -888,6 +869,92 @@ export async function validateOrder(
     }
 
     // ========================================================
+    // DEBUG GLOBAL DES STOCKS / LOTS
+    // ========================================================
+    //
+    // Ces logs permettent de vérifier la cohérence :
+    //
+    // FinishedStock.quantity
+    // =
+    // somme des FinishedStockLot.remainingQuantity
+    //
+    // Ils peuvent être retirés après résolution
+    // du problème.
+    //
+    // ========================================================
+
+    console.log("[ORDER][STOCK DEBUG] Validation commande", {
+      userId: user.id,
+      pointOfSaleId: pointOfSale.id,
+      pointOfSaleName: pointOfSale.name,
+      requestedItems: input.items,
+      now: now.toISOString(),
+    });
+
+    for (const stock of stocks) {
+      const stockLots = lotsByStockId.get(stock.id) ?? [];
+
+      const totalLotQuantity = stockLots.reduce(
+        (total, lot) => total + lot.remainingQuantity,
+        0,
+      );
+
+      const validLots = stockLots.filter(
+        (lot) => lot.expiresAt === null || lot.expiresAt > now,
+      );
+
+      const expiredLots = stockLots.filter(
+        (lot) => lot.expiresAt !== null && lot.expiresAt <= now,
+      );
+
+      const validQuantity = validLots.reduce(
+        (total, lot) => total + lot.remainingQuantity,
+        0,
+      );
+
+      const expiredQuantity = expiredLots.reduce(
+        (total, lot) => total + lot.remainingQuantity,
+        0,
+      );
+
+      console.log("[ORDER][STOCK DEBUG] Stock", {
+        finishedStockId: stock.id,
+
+        variantId: stock.variant.id,
+
+        sku: stock.variant.sku,
+
+        productName: stock.variant.product.name,
+
+        stockQuantity: stock.quantity,
+
+        totalLotQuantity,
+
+        validQuantity,
+
+        expiredQuantity,
+
+        difference: stock.quantity - totalLotQuantity,
+
+        lotCount: stockLots.length,
+
+        validLotCount: validLots.length,
+
+        expiredLotCount: expiredLots.length,
+
+        lots: stockLots.map((lot) => ({
+          id: lot.id,
+          entryId: lot.entryId,
+          quantity: lot.quantity,
+          remainingQuantity: lot.remainingQuantity,
+          expiresAt: lot.expiresAt?.toISOString() ?? null,
+          createdAt: lot.createdAt.toISOString(),
+          expired: lot.expiresAt !== null && lot.expiresAt <= now,
+        })),
+      });
+    }
+
+    // ========================================================
     // VÉRIFIER LES QUANTITÉS DISPONIBLES
     // ========================================================
 
@@ -898,32 +965,202 @@ export async function validateOrder(
         throw new Error("PRODUCT_NOT_FOUND");
       }
 
-      // ------------------------------------------------------
-      // 1. Vérification du stock agrégé
-      // ------------------------------------------------------
+      const allLots = lotsByStockId.get(stock.id) ?? [];
 
-      if (item.quantity > stock.quantity) {
+      // ======================================================
+      // DEBUG PRODUIT DEMANDÉ
+      // ======================================================
+
+      console.log("[ORDER][STOCK DEBUG] Vérification produit", {
+        variantId: item.variantId,
+
+        productName: stock.variant.product.name,
+
+        sku: stock.variant.sku,
+
+        requestedQuantity: item.quantity,
+
+        finishedStockId: stock.id,
+
+        stockQuantity: stock.quantity,
+
+        lots: allLots.map((lot) => ({
+          id: lot.id,
+          entryId: lot.entryId,
+          remainingQuantity: lot.remainingQuantity,
+          expiresAt: lot.expiresAt?.toISOString() ?? null,
+          expired: lot.expiresAt !== null && lot.expiresAt <= now,
+        })),
+      });
+
+      // ======================================================
+      // 1. STOCK GLOBAL
+      // ======================================================
+
+      if (stock.quantity <= 0) {
+        console.warn("[ORDER][STOCK] Stock global vide", {
+          variantId: item.variantId,
+          finishedStockId: stock.id,
+          stockQuantity: stock.quantity,
+        });
+
         throw new Error("INSUFFICIENT_STOCK");
       }
 
-      // ------------------------------------------------------
-      // 2. Vérification du stock réellement disponible
-      //    dans les lots non expirés.
-      // ------------------------------------------------------
+      if (item.quantity > stock.quantity) {
+        console.warn("[ORDER][STOCK] Stock global insuffisant", {
+          variantId: item.variantId,
 
-      const availableLots = lotsByStockId.get(stock.id) ?? [];
+          requestedQuantity: item.quantity,
+
+          stockQuantity: stock.quantity,
+        });
+
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+
+      // ======================================================
+      // 2. AUCUN LOT
+      // ======================================================
+      //
+      // Le stock global existe mais aucun lot
+      // ne possède de quantité restante.
+      //
+      // Ce n'est PAS PRODUCT_EXPIRED.
+      //
+      // C'est une incohérence de données.
+      //
+      // ======================================================
+
+      if (allLots.length === 0) {
+        console.error("[ORDER][STOCK ERROR] STOCK_LOTS_MISSING", {
+          variantId: item.variantId,
+
+          productName: stock.variant.product.name,
+
+          sku: stock.variant.sku,
+
+          finishedStockId: stock.id,
+
+          stockQuantity: stock.quantity,
+
+          requestedQuantity: item.quantity,
+
+          message:
+            "FinishedStock possède du stock mais aucun FinishedStockLot avec remainingQuantity > 0.",
+        });
+
+        throw new Error("STOCK_LOTS_MISSING");
+      }
+
+      // ======================================================
+      // 3. LOTS VALIDES
+      // ======================================================
+
+      const availableLots = allLots.filter(
+        (lot) => lot.expiresAt === null || lot.expiresAt > now,
+      );
+
+      // ======================================================
+      // 4. QUANTITÉ VENDABLE
+      // ======================================================
 
       const availableLotQuantity = availableLots.reduce(
         (total, lot) => total + lot.remainingQuantity,
         0,
       );
 
-      if (availableLotQuantity < item.quantity) {
-        // Le stock agrégé peut être > 0
-        // alors que les lots sont expirés.
-        if (availableLotQuantity === 0) {
+      // ======================================================
+      // 5. QUANTITÉ EXPIRÉE
+      // ======================================================
+
+      const expiredLots = allLots.filter(
+        (lot) => lot.expiresAt !== null && lot.expiresAt <= now,
+      );
+
+      const expiredQuantity = expiredLots.reduce(
+        (total, lot) => total + lot.remainingQuantity,
+        0,
+      );
+
+      // ======================================================
+      // DEBUG DISPONIBILITÉ
+      // ======================================================
+
+      console.log("[ORDER][STOCK DEBUG] Disponibilité produit", {
+        variantId: item.variantId,
+
+        productName: stock.variant.product.name,
+
+        requestedQuantity: item.quantity,
+
+        stockQuantity: stock.quantity,
+
+        availableLotQuantity,
+
+        expiredQuantity,
+
+        validLotCount: availableLots.length,
+
+        expiredLotCount: expiredLots.length,
+      });
+
+      // ======================================================
+      // 6. AUCUN STOCK VALIDE
+      // ======================================================
+
+      if (availableLotQuantity === 0) {
+        console.error("[ORDER][STOCK ERROR] Aucun lot vendable", {
+          variantId: item.variantId,
+
+          productName: stock.variant.product.name,
+
+          sku: stock.variant.sku,
+
+          finishedStockId: stock.id,
+
+          stockQuantity: stock.quantity,
+
+          requestedQuantity: item.quantity,
+
+          expiredQuantity,
+
+          expiredLots: expiredLots.map((lot) => ({
+            id: lot.id,
+            entryId: lot.entryId,
+            remainingQuantity: lot.remainingQuantity,
+            expiresAt: lot.expiresAt?.toISOString() ?? null,
+          })),
+
+          message:
+            expiredQuantity > 0
+              ? "Le stock global existe mais tous les lots restants sont expirés."
+              : "Le stock global existe mais aucun lot valide n'est disponible.",
+        });
+
+        if (expiredQuantity > 0) {
           throw new Error("PRODUCT_EXPIRED");
         }
+
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+
+      // ======================================================
+      // 7. LOTS VALIDES MAIS QUANTITÉ INSUFFISANTE
+      // ======================================================
+
+      if (availableLotQuantity < item.quantity) {
+        console.warn("[ORDER][STOCK] Lots valides insuffisants", {
+          variantId: item.variantId,
+
+          requestedQuantity: item.quantity,
+
+          stockQuantity: stock.quantity,
+
+          availableLotQuantity,
+
+          expiredQuantity,
+        });
 
         throw new Error("INSUFFICIENT_STOCK");
       }
@@ -982,18 +1219,21 @@ export async function validateOrder(
 
       // Les points doivent respecter
       // le bloc défini par la boutique.
+
       if (input.pointsUsed % pointsRequired !== 0) {
         throw new Error("INVALID_LOYALTY_POINTS");
       }
 
       // Le client ne peut pas dépenser
       // plus de points qu'il n'en possède.
+
       if (input.pointsUsed > customer.loyaltyPoints) {
         throw new Error("INSUFFICIENT_LOYALTY_POINTS");
       }
 
       // Limite imposée par le montant
       // de la commande.
+
       const maxPointsUsable =
         Math.floor(subtotal / discountPerBlock) * pointsRequired;
 
@@ -1029,7 +1269,6 @@ export async function validateOrder(
       where: {
         id: user.id,
       },
-
       select: {
         id: true,
         name: true,
@@ -1055,21 +1294,15 @@ export async function validateOrder(
     const sale = await tx.sale.create({
       data: {
         receiptNumber,
-
         pointOfSaleId: pointOfSale.id,
-
         sellerId: seller.id,
-
         customerId: customer?.id ?? null,
 
         subtotal,
-
         discountAmount,
-
         totalAmount,
 
         pointsEarned,
-
         pointsUsed,
 
         paymentMethod: input.paymentMethod,
@@ -1107,13 +1340,9 @@ export async function validateOrder(
       await tx.saleItem.create({
         data: {
           saleId: sale.id,
-
           variantId: stock.variant.id,
-
           quantity: item.quantity,
-
           unitPrice,
-
           subtotal: unitPrice * item.quantity,
         },
       });
@@ -1123,22 +1352,20 @@ export async function validateOrder(
     // DÉCRÉMENT DU STOCK
     // ========================================================
     //
-    // Pour chaque produit :
-    //
     // FinishedStock.quantity
-    //          ↓
+    //        ↓
     // décrément global
     //
     // FinishedStockLot.remainingQuantity
-    //          ↓
+    //        ↓
     // décrément FIFO
     //
     // FinishedStockEntry
-    //          ↓
+    //        ↓
     // NE BOUGE PAS
     //
-    // ProductionItem
-    //          ↓
+    // ProductionItem.remainingQuantity
+    //        ↓
     // NE BOUGE PAS
     //
     // ========================================================
@@ -1152,10 +1379,42 @@ export async function validateOrder(
 
       let quantityToConsume = item.quantity;
 
-      const availableLots = lotsByStockId.get(stock.id) ?? [];
+      // ------------------------------------------------------
+      // IMPORTANT :
+      // On utilise UNIQUEMENT les lots valides.
+      // ------------------------------------------------------
+
+      const allLots = lotsByStockId.get(stock.id) ?? [];
+
+      const availableLots = allLots.filter(
+        (lot) => lot.expiresAt === null || lot.expiresAt > now,
+      );
 
       // ------------------------------------------------------
-      // CONSOMMATION FIFO DES LOTS
+      // DEBUG CONSOMMATION
+      // ------------------------------------------------------
+
+      console.log("[ORDER][STOCK DEBUG] Début consommation FIFO", {
+        variantId: item.variantId,
+
+        productName: stock.variant.product.name,
+
+        requestedQuantity: item.quantity,
+
+        finishedStockId: stock.id,
+
+        stockQuantity: stock.quantity,
+
+        availableLots: availableLots.map((lot) => ({
+          id: lot.id,
+          entryId: lot.entryId,
+          remainingQuantity: lot.remainingQuantity,
+          expiresAt: lot.expiresAt?.toISOString() ?? null,
+        })),
+      });
+
+      // ------------------------------------------------------
+      // CONSOMMATION FIFO
       // ------------------------------------------------------
 
       for (const lot of availableLots) {
@@ -1172,25 +1431,29 @@ export async function validateOrder(
           continue;
         }
 
+        console.log("[ORDER][STOCK DEBUG] Consommation lot", {
+          lotId: lot.id,
+
+          variantId: item.variantId,
+
+          quantityBefore: lot.remainingQuantity,
+
+          quantityToConsume,
+
+          quantityFromLot,
+
+          expiresAt: lot.expiresAt?.toISOString() ?? null,
+        });
+
         // ----------------------------------------------------
         // DÉCRÉMENT ATOMIQUE DU LOT
         // ----------------------------------------------------
         //
         // Le gte protège contre une vente concurrente.
         //
-        // Exemple :
+        // Le lot doit également être encore valide
+        // au moment exact de la vente.
         //
-        // lot = 4
-        //
-        // vente A prend 3
-        // vente B veut prendre 2
-        //
-        // après A :
-        // lot = 1
-        //
-        // B ne pourra pas décrémenter 2.
-        //
-        // ----------------------------------------------------
 
         const updatedLot = await tx.finishedStockLot.updateMany({
           where: {
@@ -1200,8 +1463,6 @@ export async function validateOrder(
               gte: quantityFromLot,
             },
 
-            // Le lot doit toujours être valide
-            // au moment exact de la vente.
             OR: [
               {
                 expiresAt: null,
@@ -1222,10 +1483,33 @@ export async function validateOrder(
         });
 
         if (updatedLot.count !== 1) {
+          console.error("[ORDER][STOCK ERROR] Échec décrément lot", {
+            lotId: lot.id,
+
+            variantId: item.variantId,
+
+            requestedFromLot: quantityFromLot,
+
+            previousRemainingQuantity: lot.remainingQuantity,
+
+            message:
+              "Le lot a probablement été modifié par une autre transaction ou est devenu invalide.",
+          });
+
           throw new Error("INSUFFICIENT_STOCK");
         }
 
         quantityToConsume -= quantityFromLot;
+
+        console.log("[ORDER][STOCK DEBUG] Lot décrémenté", {
+          lotId: lot.id,
+
+          quantityConsumed: quantityFromLot,
+
+          quantityRemainingExpected: lot.remainingQuantity - quantityFromLot,
+
+          quantityStillToConsume: quantityToConsume,
+        });
       }
 
       // ------------------------------------------------------
@@ -1233,11 +1517,29 @@ export async function validateOrder(
       // ------------------------------------------------------
 
       if (quantityToConsume > 0) {
+        console.error("[ORDER][STOCK ERROR] Quantité non consommée", {
+          variantId: item.variantId,
+
+          productName: stock.variant.product.name,
+
+          requestedQuantity: item.quantity,
+
+          quantityStillToConsume: quantityToConsume,
+
+          stockQuantity: stock.quantity,
+
+          availableLots: availableLots.map((lot) => ({
+            id: lot.id,
+            remainingQuantity: lot.remainingQuantity,
+            expiresAt: lot.expiresAt?.toISOString() ?? null,
+          })),
+        });
+
         throw new Error("INSUFFICIENT_STOCK");
       }
 
       // ------------------------------------------------------
-      // DÉCRÉMENT DU STOCK AGRÉGÉ
+      // DÉCRÉMENT STOCK AGRÉGÉ
       // ------------------------------------------------------
 
       const updatedStock = await tx.finishedStock.updateMany({
@@ -1257,8 +1559,31 @@ export async function validateOrder(
       });
 
       if (updatedStock.count !== 1) {
+        console.error("[ORDER][STOCK ERROR] Échec décrément FinishedStock", {
+          finishedStockId: stock.id,
+
+          variantId: item.variantId,
+
+          requestedQuantity: item.quantity,
+
+          previousStockQuantity: stock.quantity,
+
+          message:
+            "Le stock global a probablement été modifié par une autre transaction.",
+        });
+
         throw new Error("INSUFFICIENT_STOCK");
       }
+
+      console.log("[ORDER][STOCK DEBUG] FinishedStock décrémenté", {
+        finishedStockId: stock.id,
+
+        variantId: item.variantId,
+
+        quantityConsumed: item.quantity,
+
+        quantityRemainingExpected: stock.quantity - item.quantity,
+      });
     }
 
     // ========================================================
@@ -1274,15 +1599,10 @@ export async function validateOrder(
         await tx.loyaltyTransaction.create({
           data: {
             customerId: customer.id,
-
             saleId: sale.id,
-
             type: "EARN",
-
             points: pointsEarned,
-
             balanceAfter: loyaltyBalanceAfter,
-
             reason: "Points gagnés lors de la vente",
           },
         });
@@ -1296,13 +1616,12 @@ export async function validateOrder(
         await tx.loyaltyTransaction.create({
           data: {
             customerId: customer.id,
-
             saleId: sale.id,
-
             type: "REDEEM",
 
             // On conserve ta logique actuelle :
             // les points utilisés sont positifs.
+
             points: pointsUsed,
 
             balanceAfter: loyaltyBalanceAfter,
@@ -1338,7 +1657,6 @@ export async function validateOrder(
     const invoice = await tx.invoice.create({
       data: {
         saleId: sale.id,
-
         invoiceNumber,
 
         status: "GENERATED",
@@ -1397,19 +1715,27 @@ export async function validateOrder(
         invoiceNumber: true,
         status: true,
         currency: true,
+
         shopName: true,
+
         pointOfSaleName: true,
         pointOfSaleAddress: true,
         pointOfSaleTelephone: true,
+
         sellerName: true,
+
         paymentMethod: true,
+
         subtotal: true,
         discountAmount: true,
         totalAmount: true,
+
         customerName: true,
         customerPhone: true,
+
         pointsEarned: true,
         pointsUsed: true,
+
         createdAt: true,
       },
     });
@@ -1461,7 +1787,7 @@ export async function validateOrder(
     );
 
     // ========================================================
-    // RÉSULTAT CLIENT
+    // CLIENT MIS À JOUR
     // ========================================================
 
     const updatedCustomer = customer
@@ -1480,13 +1806,9 @@ export async function validateOrder(
     return {
       sale: {
         id: sale.id,
-
         receiptNumber: sale.receiptNumber,
-
         pointOfSaleId: sale.pointOfSaleId,
-
         sellerId: sale.sellerId,
-
         customerId: sale.customerId,
 
         subtotal: Number(sale.subtotal),
