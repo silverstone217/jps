@@ -1674,7 +1674,7 @@ export async function validateOrder(
         pointOfSaleName: pointOfSale.name,
         pointOfSaleAddress: pointOfSale.address,
         pointOfSaleTelephone: pointOfSale.telephone,
-        pointOfSaleId: pointOfSale.id,
+        pointOfSaleId: pointOfSale?.id ?? null,
 
         // --------------------------------------------------
         // SNAPSHOT VENDEUR
