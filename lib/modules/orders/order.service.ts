@@ -883,76 +883,76 @@ export async function validateOrder(
     //
     // ========================================================
 
-    console.log("[ORDER][STOCK DEBUG] Validation commande", {
-      userId: user.id,
-      pointOfSaleId: pointOfSale.id,
-      pointOfSaleName: pointOfSale.name,
-      requestedItems: input.items,
-      now: now.toISOString(),
-    });
+    // console.log("[ORDER][STOCK DEBUG] Validation commande", {
+    //   userId: user.id,
+    //   pointOfSaleId: pointOfSale.id,
+    //   pointOfSaleName: pointOfSale.name,
+    //   requestedItems: input.items,
+    //   now: now.toISOString(),
+    // });
 
-    for (const stock of stocks) {
-      const stockLots = lotsByStockId.get(stock.id) ?? [];
+    // for (const stock of stocks) {
+    //   const stockLots = lotsByStockId.get(stock.id) ?? [];
 
-      const totalLotQuantity = stockLots.reduce(
-        (total, lot) => total + lot.remainingQuantity,
-        0,
-      );
+    //   const totalLotQuantity = stockLots.reduce(
+    //     (total, lot) => total + lot.remainingQuantity,
+    //     0,
+    //   );
 
-      const validLots = stockLots.filter(
-        (lot) => lot.expiresAt === null || lot.expiresAt > now,
-      );
+    //   const validLots = stockLots.filter(
+    //     (lot) => lot.expiresAt === null || lot.expiresAt > now,
+    //   );
 
-      const expiredLots = stockLots.filter(
-        (lot) => lot.expiresAt !== null && lot.expiresAt <= now,
-      );
+    //   const expiredLots = stockLots.filter(
+    //     (lot) => lot.expiresAt !== null && lot.expiresAt <= now,
+    //   );
 
-      const validQuantity = validLots.reduce(
-        (total, lot) => total + lot.remainingQuantity,
-        0,
-      );
+    //   const validQuantity = validLots.reduce(
+    //     (total, lot) => total + lot.remainingQuantity,
+    //     0,
+    //   );
 
-      const expiredQuantity = expiredLots.reduce(
-        (total, lot) => total + lot.remainingQuantity,
-        0,
-      );
+    //   const expiredQuantity = expiredLots.reduce(
+    //     (total, lot) => total + lot.remainingQuantity,
+    //     0,
+    //   );
 
-      console.log("[ORDER][STOCK DEBUG] Stock", {
-        finishedStockId: stock.id,
+    // console.log("[ORDER][STOCK DEBUG] Stock", {
+    //   finishedStockId: stock.id,
 
-        variantId: stock.variant.id,
+    //   variantId: stock.variant.id,
 
-        sku: stock.variant.sku,
+    //   sku: stock.variant.sku,
 
-        productName: stock.variant.product.name,
+    //   productName: stock.variant.product.name,
 
-        stockQuantity: stock.quantity,
+    //   stockQuantity: stock.quantity,
 
-        totalLotQuantity,
+    //   totalLotQuantity,
 
-        validQuantity,
+    //   validQuantity,
 
-        expiredQuantity,
+    //   expiredQuantity,
 
-        difference: stock.quantity - totalLotQuantity,
+    //   difference: stock.quantity - totalLotQuantity,
 
-        lotCount: stockLots.length,
+    //   lotCount: stockLots.length,
 
-        validLotCount: validLots.length,
+    //   validLotCount: validLots.length,
 
-        expiredLotCount: expiredLots.length,
+    //   expiredLotCount: expiredLots.length,
 
-        lots: stockLots.map((lot) => ({
-          id: lot.id,
-          entryId: lot.entryId,
-          quantity: lot.quantity,
-          remainingQuantity: lot.remainingQuantity,
-          expiresAt: lot.expiresAt?.toISOString() ?? null,
-          createdAt: lot.createdAt.toISOString(),
-          expired: lot.expiresAt !== null && lot.expiresAt <= now,
-        })),
-      });
-    }
+    //   lots: stockLots.map((lot) => ({
+    //     id: lot.id,
+    //     entryId: lot.entryId,
+    //     quantity: lot.quantity,
+    //     remainingQuantity: lot.remainingQuantity,
+    //     expiresAt: lot.expiresAt?.toISOString() ?? null,
+    //     createdAt: lot.createdAt.toISOString(),
+    //     expired: lot.expiresAt !== null && lot.expiresAt <= now,
+    //   })),
+    // });
+    // }
 
     // ========================================================
     // VÉRIFIER LES QUANTITÉS DISPONIBLES
@@ -971,27 +971,27 @@ export async function validateOrder(
       // DEBUG PRODUIT DEMANDÉ
       // ======================================================
 
-      console.log("[ORDER][STOCK DEBUG] Vérification produit", {
-        variantId: item.variantId,
+      // console.log("[ORDER][STOCK DEBUG] Vérification produit", {
+      //   variantId: item.variantId,
 
-        productName: stock.variant.product.name,
+      //   productName: stock.variant.product.name,
 
-        sku: stock.variant.sku,
+      //   sku: stock.variant.sku,
 
-        requestedQuantity: item.quantity,
+      //   requestedQuantity: item.quantity,
 
-        finishedStockId: stock.id,
+      //   finishedStockId: stock.id,
 
-        stockQuantity: stock.quantity,
+      //   stockQuantity: stock.quantity,
 
-        lots: allLots.map((lot) => ({
-          id: lot.id,
-          entryId: lot.entryId,
-          remainingQuantity: lot.remainingQuantity,
-          expiresAt: lot.expiresAt?.toISOString() ?? null,
-          expired: lot.expiresAt !== null && lot.expiresAt <= now,
-        })),
-      });
+      //   lots: allLots.map((lot) => ({
+      //     id: lot.id,
+      //     entryId: lot.entryId,
+      //     remainingQuantity: lot.remainingQuantity,
+      //     expiresAt: lot.expiresAt?.toISOString() ?? null,
+      //     expired: lot.expiresAt !== null && lot.expiresAt <= now,
+      //   })),
+      // });
 
       // ======================================================
       // 1. STOCK GLOBAL
@@ -1672,10 +1672,9 @@ export async function validateOrder(
         // --------------------------------------------------
 
         pointOfSaleName: pointOfSale.name,
-
         pointOfSaleAddress: pointOfSale.address,
-
         pointOfSaleTelephone: pointOfSale.telephone,
+        pointOfSaleId: pointOfSale.id,
 
         // --------------------------------------------------
         // SNAPSHOT VENDEUR
@@ -1688,17 +1687,12 @@ export async function validateOrder(
         // --------------------------------------------------
 
         paymentMethod: input.paymentMethod,
-
         currency: shop.currency,
 
         subtotal,
-
         discountAmount,
-
         totalAmount,
-
         pointsEarned,
-
         pointsUsed,
 
         // --------------------------------------------------
@@ -1706,8 +1700,8 @@ export async function validateOrder(
         // --------------------------------------------------
 
         customerName: customer?.name ?? null,
-
         customerPhone: customer?.phone ?? null,
+        customerId: customer?.id ?? null,
       },
 
       select: {
@@ -1761,15 +1755,11 @@ export async function validateOrder(
             invoiceId: invoice.id,
 
             productName: stock.variant.product.name,
-
             size: stock.variant.packaging.size,
-
             quantity: item.quantity,
 
             unitPrice,
-
             subtotal: itemSubtotal,
-
             currency: shop.currency,
           },
 
@@ -1812,15 +1802,10 @@ export async function validateOrder(
         customerId: sale.customerId,
 
         subtotal: Number(sale.subtotal),
-
         discountAmount: Number(sale.discountAmount),
-
         totalAmount: Number(sale.totalAmount),
-
         pointsEarned: sale.pointsEarned,
-
         pointsUsed: sale.pointsUsed,
-
         paymentMethod: sale.paymentMethod,
 
         createdAt: sale.createdAt.toISOString(),
@@ -1830,35 +1815,26 @@ export async function validateOrder(
         id: invoice.id,
 
         invoiceNumber: invoice.invoiceNumber,
-
         status: invoice.status,
-
         currency: invoice.currency,
 
         shopName: invoice.shopName,
 
         pointOfSaleName: invoice.pointOfSaleName,
-
         pointOfSaleAddress: invoice.pointOfSaleAddress,
-
         pointOfSaleTelephone: invoice.pointOfSaleTelephone,
 
         sellerName: invoice.sellerName,
 
         subtotal: Number(invoice.subtotal),
-
         paymentMethod: invoice.paymentMethod,
-
         discountAmount: Number(invoice.discountAmount),
-
         totalAmount: Number(invoice.totalAmount),
 
         customerName: invoice.customerName,
-
         customerPhone: invoice.customerPhone,
 
         pointsEarned: invoice.pointsEarned,
-
         pointsUsed: invoice.pointsUsed,
 
         createdAt: invoice.createdAt.toISOString(),
@@ -1867,13 +1843,10 @@ export async function validateOrder(
           id: item.id,
 
           productName: item.productName,
-
           size: item.size,
 
           quantity: item.quantity,
-
           unitPrice: Number(item.unitPrice),
-
           subtotal: Number(item.subtotal),
 
           currency: item.currency,

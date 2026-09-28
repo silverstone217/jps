@@ -248,7 +248,8 @@ model PointOfSale {
   sales Sale[]
 
   // Pertes constatées dans ce POS
-  losses Loss[]
+  losses   Loss[]
+  invoices Invoice[]
 
   @@unique([shopId, code])
   @@index([shopId])
@@ -755,6 +756,7 @@ model Customer {
   sales Sale[]
 
   loyaltyTransactions LoyaltyTransaction[]
+  invoices            Invoice[]
 
   @@index([phone])
 }
@@ -885,6 +887,7 @@ model Invoice {
   // Adresse et téléphone du PDV au moment
   pointOfSaleAddress   String?
   pointOfSaleTelephone String?
+  pointOfSaleId        String?
 
   // ======================================================
   // SNAPSHOT DU VENDEUR
@@ -909,6 +912,7 @@ model Invoice {
 
   customerName  String?
   customerPhone String?
+  customerId    String?
 
   // ======================================================
   // DATE
@@ -920,7 +924,9 @@ model Invoice {
   // RELATIONS
   // ======================================================
 
-  sale Sale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  sale     Sale         @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  customer Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  pos      PointOfSale? @relation(fields: [pointOfSaleId], references: [id], onDelete: Restrict)
 
   items InvoiceItem[]
 
