@@ -1,5 +1,3 @@
-// lib/modules/customer/customer.service.ts
-
 import { prisma } from "@/lib/prisma";
 
 import type { GetCustomerInput, GetCustomersInput } from "./customer.schema";
@@ -17,6 +15,20 @@ interface CustomerContext {
    * null = manager consulte tous les POS
    */
   pointOfSaleId: string | null;
+
+  /**
+   * Liste des POS autorisés dans le contexte courant.
+   *
+   * EMPLOYEE :
+   *   → uniquement son POS
+   *
+   * MANAGER + POS :
+   *   → uniquement le POS sélectionné
+   *
+   * MANAGER sans POS :
+   *   → tous les POS actifs de la boutique
+   */
+  pointOfSaleIds: string[];
 
   /**
    * true = manager consulte tous les POS
@@ -67,7 +79,7 @@ const customerListSelect = {
  *   → consultation d'un POS précis
  *
  * pointOfSaleId absent :
- *   → consultation de tous les POS de sa boutique
+ *   → consultation de tous les POS actifs de sa boutique
  */
 const resolveCustomerContext = async (
   userId: string,
@@ -87,11 +99,9 @@ const resolveCustomerContext = async (
           isActive: true,
         },
       },
-
       orderBy: {
         createdAt: "asc",
       },
-
       select: {
         shopId: true,
         pointOfSaleId: true,
@@ -115,6 +125,7 @@ const resolveCustomerContext = async (
     return {
       shopId: assignment.shopId,
       pointOfSaleId: assignment.pointOfSaleId,
+      pointOfSaleIds: [assignment.pointOfSaleId],
       isAllPointOfSales: false,
     };
   }
@@ -127,7 +138,6 @@ const resolveCustomerContext = async (
     where: {
       ownerId: userId,
     },
-
     select: {
       id: true,
     },
@@ -147,7 +157,6 @@ const resolveCustomerContext = async (
         id: pointOfSaleId,
         shopId: shop.id,
       },
-
       select: {
         id: true,
         isActive: true,
@@ -165,6 +174,7 @@ const resolveCustomerContext = async (
     return {
       shopId: shop.id,
       pointOfSaleId: pointOfSale.id,
+      pointOfSaleIds: [pointOfSale.id],
       isAllPointOfSales: false,
     };
   }
@@ -173,53 +183,46 @@ const resolveCustomerContext = async (
   // MANAGER → TOUS LES POS
   // ====================================================
 
+  const pointOfSales = await prisma.pointOfSale.findMany({
+    where: {
+      shopId: shop.id,
+      isActive: true,
+    },
+    select: {
+      id: true,
+    },
+  });
+
   return {
     shopId: shop.id,
     pointOfSaleId: null,
+    pointOfSaleIds: pointOfSales.map((pointOfSale) => pointOfSale.id),
     isAllPointOfSales: true,
   };
 };
 
 // ======================================================
-// FILTRE FACTURES
+// FILTRE FACTURES POUR ACTIVITÉ CLIENT
 // ======================================================
 
 /**
  * Construit le filtre utilisé pour identifier l'activité
- * d'un client dans la boutique / le POS courant.
+ * d'un client dans le contexte courant.
  *
  * Customer n'a pas de shopId.
  *
- * On passe donc par Invoice → PointOfSale → Shop.
+ * On utilise donc Invoice.pointOfSaleId.
  *
- * ------------------------------------------------------
- *
- * POS précis :
- *
- * invoices.some({
- *   pointOfSaleId,
- *   pointOfSale.shopId
- * })
- *
- * Tous les POS :
- *
- * invoices.some({
- *   pointOfSale.shopId
- * })
+ * Les pointOfSaleIds ont déjà été validés par
+ * resolveCustomerContext().
  */
 const buildCustomerInvoiceActivityFilter = (context: CustomerContext) => {
   return {
     invoices: {
       some: {
-        pointOfSale: {
-          shopId: context.shopId,
+        pointOfSaleId: {
+          in: context.pointOfSaleIds,
         },
-
-        ...(context.pointOfSaleId
-          ? {
-              pointOfSaleId: context.pointOfSaleId,
-            }
-          : {}),
       },
     },
   };
@@ -234,16 +237,9 @@ const buildInvoiceWhere = (customerIds: string[], context: CustomerContext) => {
     customerId: {
       in: customerIds,
     },
-
-    pointOfSale: {
-      shopId: context.shopId,
+    pointOfSaleId: {
+      in: context.pointOfSaleIds,
     },
-
-    ...(context.pointOfSaleId
-      ? {
-          pointOfSaleId: context.pointOfSaleId,
-        }
-      : {}),
   };
 };
 
@@ -265,22 +261,14 @@ const getCustomerForContext = async (
   const customer = await prisma.customer.findFirst({
     where: {
       id: customerId,
-
       invoices: {
         some: {
-          pointOfSale: {
-            shopId: context.shopId,
+          pointOfSaleId: {
+            in: context.pointOfSaleIds,
           },
-
-          ...(context.pointOfSaleId
-            ? {
-                pointOfSaleId: context.pointOfSaleId,
-              }
-            : {}),
         },
       },
     },
-
     select: customerListSelect,
   });
 
@@ -348,7 +336,7 @@ export const getCustomers = async (
    *   → factures de ce POS
    *
    * MANAGER sans POS :
-   *   → factures de tous les POS de la boutique
+   *   → factures de tous les POS actifs de la boutique
    *
    * EMPLOYEE :
    *   → factures de son POS
@@ -396,16 +384,9 @@ export const getCustomers = async (
           {
             invoices: {
               some: {
-                pointOfSale: {
-                  shopId: context.shopId,
+                pointOfSaleId: {
+                  in: context.pointOfSaleIds,
                 },
-
-                ...(context.pointOfSaleId
-                  ? {
-                      pointOfSaleId: context.pointOfSaleId,
-                    }
-                  : {}),
-
                 createdAt: {
                   gt: updatedSince,
                 },
@@ -423,28 +404,23 @@ export const getCustomers = async (
                 createdAt: {
                   gt: updatedSince,
                 },
-
                 OR: [
-                  // Transaction liée à une vente du POS
-                  ...(context.pointOfSaleId
-                    ? [
-                        {
-                          sale: {
-                            pointOfSaleId: context.pointOfSaleId,
-                          },
-                        },
-                      ]
-                    : [
-                        {
-                          sale: {
-                            pointOfSale: {
-                              shopId: context.shopId,
-                            },
-                          },
-                        },
-                      ]),
+                  // ----------------------------------------
+                  // Transaction liée à une vente du contexte
+                  // ----------------------------------------
 
+                  {
+                    sale: {
+                      pointOfSaleId: {
+                        in: context.pointOfSaleIds,
+                      },
+                    },
+                  },
+
+                  // ----------------------------------------
                   // Ajustement manuel
+                  // ----------------------------------------
+
                   {
                     saleId: null,
                   },
@@ -473,13 +449,10 @@ export const getCustomers = async (
   const [customers, total] = await Promise.all([
     prisma.customer.findMany({
       where,
-
       select: customerListSelect,
-
       orderBy: {
         updatedAt: "desc",
       },
-
       skip,
       take: limit,
     }),
@@ -496,14 +469,13 @@ export const getCustomers = async (
   const customerIds = customers.map((customer) => customer.id);
 
   /**
-   * Les statistiques commerciales viennent maintenant
-   * des factures et non plus des ventes.
+   * Les statistiques commerciales viennent des factures
+   * et non plus des ventes.
    */
   const invoices =
     customerIds.length > 0
       ? await prisma.invoice.findMany({
           where: buildInvoiceWhere(customerIds, context),
-
           select: {
             customerId: true,
             totalAmount: true,
@@ -543,9 +515,7 @@ export const getCustomers = async (
 
     statsByCustomer.set(invoice.customerId, {
       totalSpent: (currentTotal + invoiceTotal).toString(),
-
       purchaseCount: (current?.purchaseCount ?? 0) + 1,
-
       lastPurchaseAt,
     });
   }
@@ -640,15 +610,9 @@ export const getCustomer = async (
   const invoiceWhere = {
     customerId: customer.id,
 
-    pointOfSale: {
-      shopId: context.shopId,
+    pointOfSaleId: {
+      in: context.pointOfSaleIds,
     },
-
-    ...(context.pointOfSaleId
-      ? {
-          pointOfSaleId: context.pointOfSaleId,
-        }
-      : {}),
   };
 
   // ====================================================
@@ -669,10 +633,8 @@ export const getCustomer = async (
       select: {
         id: true,
         invoiceNumber: true,
-
         status: true,
         deliveryMethod: true,
-
         whatsappSentAt: true,
         printedAt: true,
 
@@ -684,7 +646,6 @@ export const getCustomer = async (
         pointOfSaleTelephone: true,
 
         sellerName: true,
-
         paymentMethod: true,
         currency: true,
 
@@ -703,15 +664,11 @@ export const getCustomer = async (
         items: {
           select: {
             id: true,
-
             productName: true,
             size: true,
-
             quantity: true,
-
             unitPrice: true,
             subtotal: true,
-
             currency: true,
           },
         },
@@ -737,6 +694,7 @@ export const getCustomer = async (
    * - moyenne
    * - dernier achat
    */
+
   const invoiceStats = await prisma.invoice.aggregate({
     where: invoiceWhere,
 
@@ -768,31 +726,25 @@ export const getCustomer = async (
    * uniquement saleId comme relation vers une opération
    * commerciale.
    *
-   * On conserve donc cette relation pour filtrer
-   * les transactions par POS.
-   *
    * Les transactions avec saleId = null correspondent
    * aux ajustements manuels.
    */
+
   const loyaltyTransactions = await prisma.loyaltyTransaction.findMany({
     where: {
       customerId: customer.id,
 
       OR: [
         // --------------------------------------------
-        // Transaction liée à une vente
+        // Transaction liée à une vente du contexte
         // --------------------------------------------
 
         {
-          sale: context.pointOfSaleId
-            ? {
-                pointOfSaleId: context.pointOfSaleId,
-              }
-            : {
-                pointOfSale: {
-                  shopId: context.shopId,
-                },
-              },
+          sale: {
+            pointOfSaleId: {
+              in: context.pointOfSaleIds,
+            },
+          },
         },
 
         // --------------------------------------------
@@ -837,6 +789,7 @@ export const getCustomer = async (
     invoiceNumber: invoice.invoiceNumber,
 
     status: invoice.status,
+
     deliveryMethod: invoice.deliveryMethod,
 
     whatsappSentAt: invoice.whatsappSentAt,
@@ -952,7 +905,6 @@ export const getCustomer = async (
     pagination: {
       page: input.page,
       limit: input.limit,
-
       total: invoicesTotal,
 
       totalPages: Math.ceil(invoicesTotal / input.limit),
