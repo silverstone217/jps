@@ -1,6 +1,7 @@
 // lib/modules/customer/customer.service.ts
 
 import { prisma } from "@/lib/prisma";
+
 import type { GetCustomerInput, GetCustomersInput } from "./customer.schema";
 
 // ======================================================
@@ -11,7 +12,16 @@ type UserRole = "MANAGER" | "EMPLOYEE";
 
 interface CustomerContext {
   shopId: string;
-  pointOfSaleId: string;
+
+  /**
+   * null = manager consulte tous les POS
+   */
+  pointOfSaleId: string | null;
+
+  /**
+   * true = manager consulte tous les POS
+   */
+  isAllPointOfSales: boolean;
 }
 
 // ======================================================
@@ -32,17 +42,34 @@ const customerListSelect = {
 // ======================================================
 
 /**
- * Résout le POS dans lequel l'utilisateur doit travailler.
+ * Résout le contexte de consultation des clients.
  *
- * EMPLOYEE :
- *   → utilise obligatoirement son affectation active.
+ * IMPORTANT :
  *
- * MANAGER :
- *   → si pointOfSaleId est fourni, l'utilise après validation.
- *   → sinon utilise le POS principal (isMainStore = true).
- *   → s'il n'existe pas, utilise le premier POS actif.
+ * Customer est global à la boutique.
+ * Il n'appartient pas directement à un POS.
+ *
+ * Le POS sert uniquement à filtrer son activité commerciale.
+ *
+ * ------------------------------------------------------
+ * EMPLOYEE
+ * ------------------------------------------------------
+ *
+ * L'employé utilise obligatoirement son affectation active.
+ *
+ * Un pointOfSaleId fourni par le client est ignoré.
+ *
+ * ------------------------------------------------------
+ * MANAGER
+ * ------------------------------------------------------
+ *
+ * pointOfSaleId fourni :
+ *   → consultation d'un POS précis
+ *
+ * pointOfSaleId absent :
+ *   → consultation de tous les POS de sa boutique
  */
-const resolvePointOfSale = async (
+const resolveCustomerContext = async (
   userId: string,
   role: UserRole,
   pointOfSaleId?: string,
@@ -60,9 +87,11 @@ const resolvePointOfSale = async (
           isActive: true,
         },
       },
+
       orderBy: {
         createdAt: "asc",
       },
+
       select: {
         shopId: true,
         pointOfSaleId: true,
@@ -86,6 +115,7 @@ const resolvePointOfSale = async (
     return {
       shopId: assignment.shopId,
       pointOfSaleId: assignment.pointOfSaleId,
+      isAllPointOfSales: false,
     };
   }
 
@@ -97,6 +127,7 @@ const resolvePointOfSale = async (
     where: {
       ownerId: userId,
     },
+
     select: {
       id: true,
     },
@@ -106,9 +137,9 @@ const resolvePointOfSale = async (
     throw new Error("SHOP_NOT_FOUND");
   }
 
-  // ----------------------------------------------------
-  // Manager demande explicitement un POS
-  // ----------------------------------------------------
+  // ====================================================
+  // MANAGER → POS SPÉCIFIQUE
+  // ====================================================
 
   if (pointOfSaleId) {
     const pointOfSale = await prisma.pointOfSale.findFirst({
@@ -116,6 +147,7 @@ const resolvePointOfSale = async (
         id: pointOfSaleId,
         shopId: shop.id,
       },
+
       select: {
         id: true,
         isActive: true,
@@ -133,80 +165,123 @@ const resolvePointOfSale = async (
     return {
       shopId: shop.id,
       pointOfSaleId: pointOfSale.id,
+      isAllPointOfSales: false,
     };
   }
 
-  // ----------------------------------------------------
-  // Aucun POS fourni :
-  // priorité au POS principal
-  // ----------------------------------------------------
-
-  const defaultPointOfSale = await prisma.pointOfSale.findFirst({
-    where: {
-      shopId: shop.id,
-      isActive: true,
-    },
-    orderBy: [
-      {
-        isMainStore: "desc",
-      },
-      {
-        createdAt: "asc",
-      },
-    ],
-    select: {
-      id: true,
-    },
-  });
-
-  if (!defaultPointOfSale) {
-    throw new Error("POINT_OF_SALE_NOT_FOUND");
-  }
+  // ====================================================
+  // MANAGER → TOUS LES POS
+  // ====================================================
 
   return {
     shopId: shop.id,
-    pointOfSaleId: defaultPointOfSale.id,
+    pointOfSaleId: null,
+    isAllPointOfSales: true,
   };
 };
 
 // ======================================================
-// VALIDATION CLIENT DANS LE POS
+// FILTRE FACTURES
 // ======================================================
 
 /**
- * Vérifie qu'un client possède au moins une vente
- * dans le POS courant.
+ * Construit le filtre utilisé pour identifier l'activité
+ * d'un client dans la boutique / le POS courant.
  *
- * C'est volontaire :
- * un client global Customer n'est visible dans un POS
- * que s'il y possède une activité commerciale.
+ * Customer n'a pas de shopId.
+ *
+ * On passe donc par Invoice → PointOfSale → Shop.
+ *
+ * ------------------------------------------------------
+ *
+ * POS précis :
+ *
+ * invoices.some({
+ *   pointOfSaleId,
+ *   pointOfSale.shopId
+ * })
+ *
+ * Tous les POS :
+ *
+ * invoices.some({
+ *   pointOfSale.shopId
+ * })
  */
-const getCustomerForPointOfSale = async (
+const buildCustomerInvoiceActivityFilter = (context: CustomerContext) => {
+  return {
+    invoices: {
+      some: {
+        pointOfSale: {
+          shopId: context.shopId,
+        },
+
+        ...(context.pointOfSaleId
+          ? {
+              pointOfSaleId: context.pointOfSaleId,
+            }
+          : {}),
+      },
+    },
+  };
+};
+
+// ======================================================
+// FILTRE FACTURES POUR STATISTIQUES
+// ======================================================
+
+const buildInvoiceWhere = (customerIds: string[], context: CustomerContext) => {
+  return {
+    customerId: {
+      in: customerIds,
+    },
+
+    pointOfSale: {
+      shopId: context.shopId,
+    },
+
+    ...(context.pointOfSaleId
+      ? {
+          pointOfSaleId: context.pointOfSaleId,
+        }
+      : {}),
+  };
+};
+
+// ======================================================
+// CLIENT DANS LE CONTEXTE
+// ======================================================
+
+/**
+ * Vérifie qu'un client possède au moins une facture
+ * dans le contexte demandé.
+ *
+ * Un client n'est donc jamais rattaché directement
+ * à un POS.
+ */
+const getCustomerForContext = async (
   customerId: string,
-  shopId: string,
-  pointOfSaleId: string,
+  context: CustomerContext,
 ) => {
   const customer = await prisma.customer.findFirst({
     where: {
       id: customerId,
 
-      sales: {
+      invoices: {
         some: {
-          pointOfSaleId,
           pointOfSale: {
-            shopId,
+            shopId: context.shopId,
           },
+
+          ...(context.pointOfSaleId
+            ? {
+                pointOfSaleId: context.pointOfSaleId,
+              }
+            : {}),
         },
       },
     },
-    select: {
-      id: true,
-      name: true,
-      phone: true,
-      loyaltyPoints: true,
-      createdAt: true,
-      updatedAt: true,
-    },
+
+    select: customerListSelect,
   });
 
   if (!customer) {
@@ -225,14 +300,22 @@ export const getCustomers = async (
   role: UserRole,
   input: GetCustomersInput,
 ) => {
-  const context = await resolvePointOfSale(userId, role, input.pointOfSaleId);
+  // ====================================================
+  // CONTEXTE
+  // ====================================================
+
+  const context = await resolveCustomerContext(
+    userId,
+    role,
+    input.pointOfSaleId,
+  );
 
   const { search, page, limit, updatedSince } = input;
 
   const skip = (page - 1) * limit;
 
   // ====================================================
-  // FILTRE DE RECHERCHE
+  // RECHERCHE
   // ====================================================
 
   const searchFilter = search
@@ -254,63 +337,114 @@ export const getCustomers = async (
     : {};
 
   // ====================================================
-  // ACTIVITÉ DU CLIENT DANS LE POS
-  // ====================================================
-
-  const pointOfSaleActivityFilter = {
-    sales: {
-      some: {
-        pointOfSaleId: context.pointOfSaleId,
-        pointOfSale: {
-          shopId: context.shopId,
-        },
-      },
-    },
-  };
-
-  // ====================================================
-  // SYNCHRONISATION
+  // ACTIVITÉ DU CLIENT
   // ====================================================
 
   /**
-   * Customer.updatedAt est conservé ici parce qu'une
-   * modification du nom ou du téléphone doit pouvoir
-   * être synchronisée même si aucune nouvelle vente
-   * n'a été créée.
+   * Un Customer est visible uniquement s'il possède
+   * au moins une facture dans le contexte.
    *
-   * Les ventes récentes du POS sont également prises
-   * en compte.
+   * MANAGER + POS :
+   *   → factures de ce POS
+   *
+   * MANAGER sans POS :
+   *   → factures de tous les POS de la boutique
+   *
+   * EMPLOYEE :
+   *   → factures de son POS
+   */
+  const activityFilter = buildCustomerInvoiceActivityFilter(context);
+
+  // ====================================================
+  // SYNCHRONISATION OFFLINE-FIRST
+  // ====================================================
+
+  /**
+   * On conserve Customer.updatedAt :
+   *
+   * - modification du nom
+   * - modification du téléphone
+   * - modification du client
+   *
+   * On prend également en compte :
+   *
+   * - nouvelles factures
+   * - nouvelles transactions de fidélité
+   *
+   * IMPORTANT :
+   * Invoice ne possède actuellement pas updatedAt.
+   * On utilise donc createdAt pour détecter les nouvelles
+   * factures.
    */
   const updatedSinceFilter = updatedSince
     ? {
         OR: [
+          // ----------------------------------------------
+          // Modification du client
+          // ----------------------------------------------
+
           {
             updatedAt: {
               gt: updatedSince,
             },
           },
+
+          // ----------------------------------------------
+          // Nouvelle facture dans le contexte
+          // ----------------------------------------------
+
           {
-            sales: {
+            invoices: {
               some: {
-                pointOfSaleId: context.pointOfSaleId,
+                pointOfSale: {
+                  shopId: context.shopId,
+                },
+
+                ...(context.pointOfSaleId
+                  ? {
+                      pointOfSaleId: context.pointOfSaleId,
+                    }
+                  : {}),
+
                 createdAt: {
                   gt: updatedSince,
                 },
               },
             },
           },
+
+          // ----------------------------------------------
+          // Nouvelle transaction de fidélité
+          // ----------------------------------------------
+
           {
             loyaltyTransactions: {
               some: {
                 createdAt: {
                   gt: updatedSince,
                 },
+
                 OR: [
-                  {
-                    sale: {
-                      pointOfSaleId: context.pointOfSaleId,
-                    },
-                  },
+                  // Transaction liée à une vente du POS
+                  ...(context.pointOfSaleId
+                    ? [
+                        {
+                          sale: {
+                            pointOfSaleId: context.pointOfSaleId,
+                          },
+                        },
+                      ]
+                    : [
+                        {
+                          sale: {
+                            pointOfSale: {
+                              shopId: context.shopId,
+                            },
+                          },
+                        },
+                      ]),
+
+                  // Ajustement manuel
                   {
                     saleId: null,
                   },
@@ -327,22 +461,25 @@ export const getCustomers = async (
   // ====================================================
 
   const where = {
-    ...pointOfSaleActivityFilter,
+    ...activityFilter,
     ...searchFilter,
     ...updatedSinceFilter,
   };
 
   // ====================================================
-  // REQUÊTES
+  // CLIENTS + TOTAL
   // ====================================================
 
   const [customers, total] = await Promise.all([
     prisma.customer.findMany({
       where,
+
       select: customerListSelect,
+
       orderBy: {
         updatedAt: "desc",
       },
+
       skip,
       take: limit,
     }),
@@ -358,31 +495,64 @@ export const getCustomers = async (
 
   const customerIds = customers.map((customer) => customer.id);
 
-  const salesStats =
+  /**
+   * Les statistiques commerciales viennent maintenant
+   * des factures et non plus des ventes.
+   */
+  const invoices =
     customerIds.length > 0
-      ? await prisma.sale.groupBy({
-          by: ["customerId"],
-          where: {
-            customerId: {
-              in: customerIds,
-            },
-            pointOfSaleId: context.pointOfSaleId,
-          },
-          _count: {
-            id: true,
-          },
-          _sum: {
+      ? await prisma.invoice.findMany({
+          where: buildInvoiceWhere(customerIds, context),
+
+          select: {
+            customerId: true,
             totalAmount: true,
-          },
-          _max: {
             createdAt: true,
           },
         })
       : [];
 
-  const statsByCustomer = new Map(
-    salesStats.map((stats) => [stats.customerId, stats]),
-  );
+  // ====================================================
+  // AGRÉGATION DES STATISTIQUES
+  // ====================================================
+
+  const statsByCustomer = new Map<
+    string,
+    {
+      totalSpent: string;
+      purchaseCount: number;
+      lastPurchaseAt: Date | null;
+    }
+  >();
+
+  for (const invoice of invoices) {
+    if (!invoice.customerId) {
+      continue;
+    }
+
+    const current = statsByCustomer.get(invoice.customerId);
+
+    const currentTotal = current ? Number(current.totalSpent) : 0;
+
+    const invoiceTotal = Number(invoice.totalAmount);
+
+    const lastPurchaseAt =
+      !current?.lastPurchaseAt || invoice.createdAt > current.lastPurchaseAt
+        ? invoice.createdAt
+        : current.lastPurchaseAt;
+
+    statsByCustomer.set(invoice.customerId, {
+      totalSpent: (currentTotal + invoiceTotal).toString(),
+
+      purchaseCount: (current?.purchaseCount ?? 0) + 1,
+
+      lastPurchaseAt,
+    });
+  }
+
+  // ====================================================
+  // FORMATAGE
+  // ====================================================
 
   const formattedCustomers = customers.map((customer) => {
     const stats = statsByCustomer.get(customer.id);
@@ -392,13 +562,21 @@ export const getCustomers = async (
       name: customer.name,
       phone: customer.phone,
       loyaltyPoints: customer.loyaltyPoints,
-      totalSpent: stats?._sum.totalAmount?.toString() ?? "0",
-      purchaseCount: stats?._count.id ?? 0,
-      lastPurchaseAt: stats?._max.createdAt ?? null,
+
+      totalSpent: stats?.totalSpent ?? "0",
+
+      purchaseCount: stats?.purchaseCount ?? 0,
+
+      lastPurchaseAt: stats?.lastPurchaseAt ?? null,
+
       createdAt: customer.createdAt,
       updatedAt: customer.updatedAt,
     };
   });
+
+  // ====================================================
+  // RÉSULTAT
+  // ====================================================
 
   return {
     customers: formattedCustomers,
@@ -414,6 +592,7 @@ export const getCustomers = async (
 
     pointOfSale: {
       id: context.pointOfSaleId,
+      isAll: context.isAllPointOfSales,
     },
 
     sync: {
@@ -432,17 +611,21 @@ export const getCustomer = async (
   role: UserRole,
   input: GetCustomerInput,
 ) => {
-  const context = await resolvePointOfSale(userId, role, input.pointOfSaleId);
+  // ====================================================
+  // CONTEXTE
+  // ====================================================
+
+  const context = await resolveCustomerContext(
+    userId,
+    role,
+    input.pointOfSaleId,
+  );
 
   // ====================================================
   // CLIENT
   // ====================================================
 
-  const customer = await getCustomerForPointOfSale(
-    input.clientId,
-    context.shopId,
-    context.pointOfSaleId,
-  );
+  const customer = await getCustomerForContext(input.clientId, context);
 
   // ====================================================
   // PAGINATION
@@ -451,77 +634,92 @@ export const getCustomer = async (
   const skip = (input.page - 1) * input.limit;
 
   // ====================================================
-  // VENTES
+  // FILTRE FACTURES
   // ====================================================
 
-  const salesWhere = {
+  const invoiceWhere = {
     customerId: customer.id,
-    pointOfSaleId: context.pointOfSaleId,
+
+    pointOfSale: {
+      shopId: context.shopId,
+    },
+
+    ...(context.pointOfSaleId
+      ? {
+          pointOfSaleId: context.pointOfSaleId,
+        }
+      : {}),
   };
 
-  const [sales, salesTotal] = await Promise.all([
-    prisma.sale.findMany({
-      where: salesWhere,
+  // ====================================================
+  // FACTURES
+  // ====================================================
+
+  const [invoices, invoicesTotal] = await Promise.all([
+    prisma.invoice.findMany({
+      where: invoiceWhere,
+
       orderBy: {
         createdAt: "desc",
       },
+
       skip,
       take: input.limit,
+
       select: {
         id: true,
-        receiptNumber: true,
+        invoiceNumber: true,
+
+        status: true,
+        deliveryMethod: true,
+
+        whatsappSentAt: true,
+        printedAt: true,
+
+        shopName: true,
+
+        pointOfSaleId: true,
+        pointOfSaleName: true,
+        pointOfSaleAddress: true,
+        pointOfSaleTelephone: true,
+
+        sellerName: true,
+
+        paymentMethod: true,
+        currency: true,
+
         subtotal: true,
         discountAmount: true,
         totalAmount: true,
+
         pointsEarned: true,
         pointsUsed: true,
-        paymentMethod: true,
-        createdAt: true,
 
-        pointOfSale: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
+        customerName: true,
+        customerPhone: true,
+
+        createdAt: true,
 
         items: {
           select: {
             id: true,
+
+            productName: true,
+            size: true,
+
             quantity: true,
+
             unitPrice: true,
             subtotal: true,
 
-            variant: {
-              select: {
-                id: true,
-                sku: true,
-
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                  },
-                },
-
-                packaging: {
-                  select: {
-                    id: true,
-                    name: true,
-                    size: true,
-                    capacityMl: true,
-                  },
-                },
-              },
-            },
+            currency: true,
           },
         },
       },
     }),
 
-    prisma.sale.count({
-      where: salesWhere,
+    prisma.invoice.count({
+      where: invoiceWhere,
     }),
   ]);
 
@@ -529,19 +727,33 @@ export const getCustomer = async (
   // STATISTIQUES
   // ====================================================
 
-  const salesStats = await prisma.sale.aggregate({
-    where: salesWhere,
+  /**
+   * Les statistiques utilisent également Invoice.
+   *
+   * On ne dépend donc plus de Sale pour :
+   *
+   * - total dépensé
+   * - nombre d'achats
+   * - moyenne
+   * - dernier achat
+   */
+  const invoiceStats = await prisma.invoice.aggregate({
+    where: invoiceWhere,
+
     _count: {
       id: true,
     },
+
     _sum: {
       totalAmount: true,
       pointsEarned: true,
       pointsUsed: true,
     },
+
     _avg: {
       totalAmount: true,
     },
+
     _max: {
       createdAt: true,
     },
@@ -552,31 +764,51 @@ export const getCustomer = async (
   // ====================================================
 
   /**
-   * Les transactions liées à une vente sont filtrées
-   * sur le POS courant.
+   * Pour le moment LoyaltyTransaction possède
+   * uniquement saleId comme relation vers une opération
+   * commerciale.
    *
-   * Les transactions sans saleId correspondent à des
-   * ajustements manuels. Comme le client est consulté
-   * dans un POS, on les conserve dans son historique
-   * afin de ne pas perdre l'audit de fidélité.
+   * On conserve donc cette relation pour filtrer
+   * les transactions par POS.
+   *
+   * Les transactions avec saleId = null correspondent
+   * aux ajustements manuels.
    */
   const loyaltyTransactions = await prisma.loyaltyTransaction.findMany({
     where: {
       customerId: customer.id,
+
       OR: [
+        // --------------------------------------------
+        // Transaction liée à une vente
+        // --------------------------------------------
+
         {
-          sale: {
-            pointOfSaleId: context.pointOfSaleId,
-          },
+          sale: context.pointOfSaleId
+            ? {
+                pointOfSaleId: context.pointOfSaleId,
+              }
+            : {
+                pointOfSale: {
+                  shopId: context.shopId,
+                },
+              },
         },
+
+        // --------------------------------------------
+        // Ajustement manuel
+        // --------------------------------------------
+
         {
           saleId: null,
         },
       ],
     },
+
     orderBy: {
       createdAt: "desc",
     },
+
     select: {
       id: true,
       type: true,
@@ -596,57 +828,91 @@ export const getCustomer = async (
   });
 
   // ====================================================
-  // FORMATAGE
+  // FORMATAGE FACTURES
   // ====================================================
 
-  const formattedSales = sales.map((sale) => ({
-    id: sale.id,
-    receiptNumber: sale.receiptNumber,
+  const formattedInvoices = invoices.map((invoice) => ({
+    id: invoice.id,
 
-    pointOfSale: sale.pointOfSale,
+    invoiceNumber: invoice.invoiceNumber,
 
-    subtotal: sale.subtotal.toString(),
+    status: invoice.status,
+    deliveryMethod: invoice.deliveryMethod,
 
-    discountAmount: sale.discountAmount.toString(),
+    whatsappSentAt: invoice.whatsappSentAt,
 
-    totalAmount: sale.totalAmount.toString(),
+    printedAt: invoice.printedAt,
 
-    pointsEarned: sale.pointsEarned,
+    shopName: invoice.shopName,
 
-    pointsUsed: sale.pointsUsed,
+    pointOfSale: {
+      id: invoice.pointOfSaleId,
+      name: invoice.pointOfSaleName,
+      address: invoice.pointOfSaleAddress,
+      telephone: invoice.pointOfSaleTelephone,
+    },
 
-    paymentMethod: sale.paymentMethod,
+    sellerName: invoice.sellerName,
 
-    createdAt: sale.createdAt,
+    paymentMethod: invoice.paymentMethod,
 
-    items: sale.items.map((item) => ({
+    currency: invoice.currency,
+
+    subtotal: invoice.subtotal.toString(),
+
+    discountAmount: invoice.discountAmount.toString(),
+
+    totalAmount: invoice.totalAmount.toString(),
+
+    pointsEarned: invoice.pointsEarned,
+
+    pointsUsed: invoice.pointsUsed,
+
+    customerName: invoice.customerName,
+
+    customerPhone: invoice.customerPhone,
+
+    createdAt: invoice.createdAt,
+
+    items: invoice.items.map((item) => ({
       id: item.id,
+
+      productName: item.productName,
+
+      size: item.size,
+
       quantity: item.quantity,
 
       unitPrice: item.unitPrice.toString(),
 
       subtotal: item.subtotal.toString(),
 
-      variant: {
-        id: item.variant.id,
-        sku: item.variant.sku,
-
-        product: item.variant.product,
-
-        packaging: item.variant.packaging,
-      },
+      currency: item.currency,
     })),
   }));
+
+  // ====================================================
+  // FORMATAGE FIDÉLITÉ
+  // ====================================================
 
   const formattedLoyaltyTransactions = loyaltyTransactions.map(
     (transaction) => ({
       id: transaction.id,
+
       type: transaction.type,
+
       points: transaction.points,
+
       balanceAfter: transaction.balanceAfter,
+
       reason: transaction.reason,
+
       saleId: transaction.saleId,
+
       receiptNumber: transaction.sale?.receiptNumber ?? null,
+
+      pointOfSaleId: transaction.sale?.pointOfSaleId ?? null,
+
       createdAt: transaction.createdAt,
     }),
   );
@@ -666,34 +932,39 @@ export const getCustomer = async (
     },
 
     statistics: {
-      totalSpent: salesStats._sum.totalAmount?.toString() ?? "0",
+      totalSpent: invoiceStats._sum.totalAmount?.toString() ?? "0",
 
-      purchaseCount: salesStats._count.id,
+      purchaseCount: invoiceStats._count.id,
 
-      averagePurchaseAmount: salesStats._avg.totalAmount?.toString() ?? "0",
+      averagePurchaseAmount: invoiceStats._avg.totalAmount?.toString() ?? "0",
 
-      totalPointsEarned: salesStats._sum.pointsEarned ?? 0,
+      totalPointsEarned: invoiceStats._sum.pointsEarned ?? 0,
 
-      totalPointsUsed: salesStats._sum.pointsUsed ?? 0,
+      totalPointsUsed: invoiceStats._sum.pointsUsed ?? 0,
 
-      lastPurchaseAt: salesStats._max.createdAt ?? null,
+      lastPurchaseAt: invoiceStats._max.createdAt ?? null,
     },
 
-    sales: formattedSales,
+    invoices: formattedInvoices,
 
     loyaltyTransactions: formattedLoyaltyTransactions,
 
     pagination: {
       page: input.page,
       limit: input.limit,
-      total: salesTotal,
-      totalPages: Math.ceil(salesTotal / input.limit),
-      hasNextPage: input.page * input.limit < salesTotal,
+
+      total: invoicesTotal,
+
+      totalPages: Math.ceil(invoicesTotal / input.limit),
+
+      hasNextPage: input.page * input.limit < invoicesTotal,
+
       hasPreviousPage: input.page > 1,
     },
 
     pointOfSale: {
       id: context.pointOfSaleId,
+      isAll: context.isAllPointOfSales,
     },
 
     sync: {

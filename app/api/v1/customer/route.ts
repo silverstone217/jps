@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { Role } from "@/app/generated/prisma/client";
+
 import { authorize } from "@/lib/modules/auth/authorize";
 import { getCustomers } from "@/lib/modules/customer/customer.service";
 import { getCustomersSchema } from "@/lib/modules/customer/customer.schema";
@@ -31,13 +32,9 @@ export async function GET(request: Request) {
 
     const rawInput = {
       search: searchParams.get("search") ?? undefined,
-
       pointOfSaleId: searchParams.get("pointOfSaleId") ?? undefined,
-
       page: searchParams.get("page") ?? undefined,
-
       limit: searchParams.get("limit") ?? undefined,
-
       updatedSince: searchParams.get("updatedSince") ?? undefined,
     };
 
@@ -51,8 +48,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          message: "Paramètres invalides",
-          errors: parsed.error.flatten(),
+          message: parsed.error.issues.map((issue) => issue.message).join(", "),
         },
         {
           status: 400,

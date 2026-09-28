@@ -61,8 +61,7 @@ export async function GET(
       return NextResponse.json(
         {
           success: false,
-          message: "Paramètres invalides",
-          errors: parsed.error.flatten(),
+          message: parsed.error.issues.map((issue) => issue.message).join(", "),
         },
         {
           status: 400,
@@ -193,7 +192,7 @@ export async function GET(
       return NextResponse.json(
         {
           success: false,
-          message: "Client introuvable dans ce point de vente",
+          message: "Client introuvable ou inaccessible",
         },
         {
           status: 404,

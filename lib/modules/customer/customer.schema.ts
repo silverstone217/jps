@@ -36,6 +36,32 @@ const updatedSinceSchema = z.coerce
   .optional();
 
 // ======================================================
+// POS OPTIONNEL
+// ======================================================
+
+/**
+ * POS utilisé pour filtrer l'activité du client.
+ *
+ * MANAGER :
+ *   - fourni     → consultation d'un POS précis
+ *   - absent     → consultation de tous les POS
+ *
+ * EMPLOYEE :
+ *   - cette valeur n'est jamais une autorisation
+ *   - le service impose toujours le POS assigné
+ *
+ * IMPORTANT :
+ * Customer n'appartient pas à un POS.
+ * Le POS sert uniquement à filtrer son activité
+ * (factures, statistiques, historique, etc.).
+ */
+const pointOfSaleIdSchema = z
+  .string()
+  .trim()
+  .min(1, "L'identifiant du point de vente est requis")
+  .optional();
+
+// ======================================================
 // LISTE DES CLIENTS
 // ======================================================
 
@@ -44,24 +70,22 @@ export const getCustomersSchema = z.object({
    * Recherche par :
    * - nom du client
    * - numéro de téléphone
-   *
-   * La recherche est ensuite appliquée dans
-   * le POS courant.
    */
   search: searchSchema,
 
   /**
-   * POS demandé par le manager.
+   * Filtre optionnel par POS.
    *
-   * Pour un employé, cette valeur ne doit pas être
-   * considérée comme une autorisation : le service
-   * utilisera obligatoirement son POS assigné.
+   * MANAGER :
+   *   - POS fourni → clients ayant une activité
+   *     dans ce POS
+   *   - aucun POS → clients de tous les POS
+   *
+   * EMPLOYEE :
+   *   - le service ignore ce filtre
+   *   - seul son POS assigné est utilisé
    */
-  pointOfSaleId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant du point de vente est requis")
-    .optional(),
+  pointOfSaleId: pointOfSaleIdSchema,
 
   /**
    * Pagination.
@@ -71,8 +95,10 @@ export const getCustomersSchema = z.object({
   limit: limitSchema,
 
   /**
-   * Permet de préparer la synchronisation
-   * offline-first.
+   * Synchronisation offline-first.
+   *
+   * Permet de récupérer les clients dont les données
+   * ou l'activité ont changé depuis cette date.
    */
   updatedSince: updatedSinceSchema,
 });
@@ -90,22 +116,22 @@ export const getCustomerSchema = z.object({
   clientId: z.string().trim().min(1, "L'identifiant du client est requis"),
 
   /**
-   * POS dans lequel consulter l'historique.
+   * Filtre optionnel par POS.
    *
-   * Pour le manager :
-   * - le POS est choisi dans le filtre.
+   * MANAGER :
+   *   - POS fourni → détail et historique de ce POS
+   *   - aucun POS → détail et historique de tous les POS
    *
-   * Pour l'employé :
-   * - le service imposera son POS assigné.
+   * EMPLOYEE :
+   *   - le service ignore cette valeur
+   *   - seul son POS assigné est utilisé
+   *
+   * Customer reste global à la boutique MAIN.
    */
-  pointOfSaleId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant du point de vente est requis")
-    .optional(),
+  pointOfSaleId: pointOfSaleIdSchema,
 
   /**
-   * Pagination de l'historique des ventes.
+   * Pagination de l'historique des factures.
    */
   page: pageSchema,
 
