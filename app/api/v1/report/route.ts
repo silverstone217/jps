@@ -3,13 +3,16 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
-import { generateReport } from "@/lib/modules/report/report.service";
+import {
+  ReportService,
+  ReportServiceError,
+} from "@/lib/modules/report/report.service";
 import { reportQuerySchema } from "@/lib/modules/report/report.schema";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER"];
 
 // ============================================================
-// GET
+// GET /api/v1/report
 // ============================================================
 
 export async function GET(request: Request) {
@@ -27,8 +30,11 @@ export async function GET(request: Request) {
     const searchParams = new URL(request.url).searchParams;
 
     const type = searchParams.get("type")?.trim();
+
     const dateFrom = searchParams.get("dateFrom")?.trim();
+
     const dateTo = searchParams.get("dateTo")?.trim();
+
     const pointOfSaleId = searchParams.get("pointOfSaleId")?.trim();
 
     // ========================================================
@@ -37,13 +43,16 @@ export async function GET(request: Request) {
 
     const query = {
       type,
+
       ...(dateFrom ? { dateFrom } : {}),
+
       ...(dateTo ? { dateTo } : {}),
+
       ...(pointOfSaleId ? { pointOfSaleId } : {}),
     };
 
     // ========================================================
-    // VALIDATION
+    // VALIDATION ZOD
     // ========================================================
 
     const parsed = reportQuerySchema.safeParse(query);
@@ -65,7 +74,11 @@ export async function GET(request: Request) {
     // GENERATE REPORT
     // ========================================================
 
-    const report = await generateReport(user.userId, parsed.data);
+    const report = await ReportService.generateReport(user.userId, parsed.data);
+
+    // ========================================================
+    // SUCCESS
+    // ========================================================
 
     return NextResponse.json(
       {
@@ -80,7 +93,111 @@ export async function GET(request: Request) {
     console.error("GET /api/v1/report error:", error);
 
     // ========================================================
-    // AUTHORIZATION
+    // REPORT SERVICE ERRORS
+    // ========================================================
+
+    if (error instanceof ReportServiceError) {
+      switch (error.code) {
+        case "USER_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Utilisateur introuvable.",
+              code: error.code,
+            },
+            {
+              status: 404,
+            },
+          );
+
+        case "USER_INACTIVE":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Ce compte utilisateur est inactif.",
+              code: error.code,
+            },
+            {
+              status: 403,
+            },
+          );
+
+        case "USER_BANNED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Ce compte utilisateur est temporairement bloqué.",
+              code: error.code,
+            },
+            {
+              status: 403,
+            },
+          );
+
+        case "SHOP_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Boutique introuvable.",
+              code: error.code,
+            },
+            {
+              status: 404,
+            },
+          );
+
+        case "POINT_OF_SALE_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Point de vente introuvable.",
+              code: error.code,
+            },
+            {
+              status: 404,
+            },
+          );
+
+        case "INVALID_DATE_RANGE":
+          return NextResponse.json(
+            {
+              success: false,
+              message: error.message || "La période sélectionnée est invalide.",
+              code: error.code,
+            },
+            {
+              status: 400,
+            },
+          );
+
+        case "FORBIDDEN":
+          return NextResponse.json(
+            {
+              success: false,
+              message: error.message || "Accès interdit.",
+              code: error.code,
+            },
+            {
+              status: 403,
+            },
+          );
+
+        default:
+          return NextResponse.json(
+            {
+              success: false,
+              message: error.message || "Impossible de générer le rapport.",
+              code: error.code,
+            },
+            {
+              status: 500,
+            },
+          );
+      }
+    }
+
+    // ========================================================
+    // AUTHORIZATION ERRORS
     // ========================================================
 
     if (error instanceof Error) {
@@ -110,108 +227,20 @@ export async function GET(request: Request) {
     }
 
     // ========================================================
-    // ERROR CODE
+    // UNKNOWN ERROR
     // ========================================================
 
-    const code =
-      "code" in (error as object)
-        ? (error as { code?: string }).code
-        : undefined;
-
-    // ========================================================
-    // BUSINESS ERRORS
-    // ========================================================
-
-    switch (code) {
-      case "USER_NOT_FOUND":
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Utilisateur introuvable.",
-            code,
-          },
-          {
-            status: 404,
-          },
-        );
-
-      case "USER_INACTIVE":
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Ce compte utilisateur est inactif.",
-            code,
-          },
-          {
-            status: 403,
-          },
-        );
-
-      case "USER_BANNED":
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Ce compte utilisateur est temporairement bloqué.",
-            code,
-          },
-          {
-            status: 403,
-          },
-        );
-
-      case "SHOP_NOT_FOUND":
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Boutique introuvable.",
-            code,
-          },
-          {
-            status: 404,
-          },
-        );
-
-      case "POINT_OF_SALE_NOT_FOUND":
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Point de vente introuvable.",
-            code,
-          },
-          {
-            status: 404,
-          },
-        );
-
-      case "INVALID_DATE_RANGE":
-        return NextResponse.json(
-          {
-            success: false,
-            message:
-              error instanceof Error && error.message
-                ? error.message
-                : "La période sélectionnée est invalide.",
-            code,
-          },
-          {
-            status: 400,
-          },
-        );
-
-      default:
-        return NextResponse.json(
-          {
-            success: false,
-            message:
-              error instanceof Error && error.message
-                ? error.message
-                : "Impossible de générer le rapport.",
-            code,
-          },
-          {
-            status: 500,
-          },
-        );
-    }
+    return NextResponse.json(
+      {
+        success: false,
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "Impossible de générer le rapport.",
+      },
+      {
+        status: 500,
+      },
+    );
   }
 }
