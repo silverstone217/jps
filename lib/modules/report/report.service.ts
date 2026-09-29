@@ -181,7 +181,7 @@ export const ReportService = {
       where: {
         id: pointOfSaleId,
         shopId,
-        isMainStore: false,
+        // isMainStore: false,
       },
       select: {
         id: true,
