@@ -156,7 +156,6 @@ export const ReportService = {
     return prisma.pointOfSale.findMany({
       where: {
         shopId: shop.id,
-        isMainStore: false,
         isActive: true,
       },
       select: {
