@@ -98,6 +98,8 @@ model User {
 
   role Role @default(EMPLOYEE)
 
+  mustChangePassword Boolean @default(false)
+
   isActive     Boolean   @default(true) @map("is_active")
   isBanned     Boolean   @default(false) @map("is_banned")
   banExpiresAt DateTime? @map("ban_expires_at")
