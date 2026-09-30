@@ -3,7 +3,11 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import { authorize } from "@/lib/modules/auth/authorize";
-import { getStockProduct } from "@/lib/modules/stock/stock.service";
+
+import {
+  getStockProduct,
+  StockServiceError,
+} from "@/lib/modules/stock/stock.service";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER", "EMPLOYEE"];
 
@@ -13,9 +17,21 @@ interface RouteContext {
   }>;
 }
 
+// ============================================================
+// GET /api/v1/stock/:variantId
+// ============================================================
+
 export async function GET(request: Request, context: RouteContext) {
   try {
+    // ========================================================
+    // AUTHENTIFICATION / RÔLE
+    // ========================================================
+
     const payload = await authorize(request, ALLOWED_ROLES);
+
+    // ========================================================
+    // PARAMÈTRE ROUTE
+    // ========================================================
 
     const { variantId } = await context.params;
 
@@ -25,9 +41,15 @@ export async function GET(request: Request, context: RouteContext) {
           success: false,
           message: "L'identifiant du produit est requis",
         },
-        { status: 400 },
+        {
+          status: 400,
+        },
       );
     }
+
+    // ========================================================
+    // LOCALISATION DEMANDÉE
+    // ========================================================
 
     const url = new URL(request.url);
 
@@ -42,20 +64,173 @@ export async function GET(request: Request, context: RouteContext) {
           locationType: "MAIN" as const,
         };
 
+    // ========================================================
+    // RÉCUPÉRATION DU PRODUIT
+    // ========================================================
+
     const product = await getStockProduct(
       payload.userId,
       variantId.trim(),
       requestedLocation,
     );
 
+    // ========================================================
+    // SUCCÈS
+    // ========================================================
+
     return NextResponse.json(
       {
         success: true,
         product,
       },
-      { status: 200 },
+      {
+        status: 200,
+      },
     );
   } catch (error) {
+    // ========================================================
+    // ERREURS DU STOCK SERVICE
+    // ========================================================
+
+    if (error instanceof StockServiceError) {
+      switch (error.code) {
+        // ----------------------------------------------------
+        // BOUTIQUE INTROUVABLE
+        // ----------------------------------------------------
+
+        case "SHOP_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Boutique introuvable",
+            },
+            { status: 404 },
+          );
+
+        // ----------------------------------------------------
+        // UTILISATEUR INTROUVABLE
+        // ----------------------------------------------------
+
+        case "USER_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Utilisateur introuvable",
+            },
+            { status: 404 },
+          );
+
+        // ----------------------------------------------------
+        // UTILISATEUR INACTIF
+        // ----------------------------------------------------
+
+        case "USER_INACTIVE":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Votre compte est désactivé",
+            },
+            { status: 403 },
+          );
+
+        // ----------------------------------------------------
+        // UTILISATEUR BLOQUÉ
+        // ----------------------------------------------------
+
+        case "USER_BANNED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Votre compte est actuellement bloqué",
+            },
+            { status: 403 },
+          );
+
+        // ----------------------------------------------------
+        // ACCÈS INTERDIT
+        // ----------------------------------------------------
+
+        case "FORBIDDEN":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Accès interdit",
+            },
+            { status: 403 },
+          );
+
+        // ----------------------------------------------------
+        // PDV INTROUVABLE
+        // ----------------------------------------------------
+
+        case "POS_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Point de vente introuvable",
+            },
+            { status: 404 },
+          );
+
+        // ----------------------------------------------------
+        // PDV INACTIF
+        // ----------------------------------------------------
+
+        case "POS_INACTIVE":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Ce point de vente est actuellement désactivé",
+            },
+            { status: 400 },
+          );
+
+        // ----------------------------------------------------
+        // EMPLOYÉ NON AFFECTÉ
+        // ----------------------------------------------------
+
+        case "POS_NOT_ASSIGNED":
+          return NextResponse.json(
+            {
+              success: false,
+              message:
+                "Vous n'êtes actuellement affecté à aucun point de vente",
+            },
+            { status: 403 },
+          );
+
+        // ----------------------------------------------------
+        // PDV REQUIS
+        // ----------------------------------------------------
+
+        case "POS_REQUIRED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Le point de vente est requis pour cet emplacement",
+            },
+            { status: 400 },
+          );
+
+        // ----------------------------------------------------
+        // PRODUIT INTROUVABLE
+        // ----------------------------------------------------
+
+        case "STOCK_PRODUCT_NOT_FOUND":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Produit introuvable dans cet emplacement de stock",
+            },
+            { status: 404 },
+          );
+      }
+    }
+
+    // ========================================================
+    // ERREURS D'AUTHENTIFICATION
+    // ========================================================
+
     if (error instanceof Error) {
       switch (error.message) {
         case "UNAUTHORIZED":
@@ -75,81 +250,12 @@ export async function GET(request: Request, context: RouteContext) {
             },
             { status: 403 },
           );
-
-        case "SHOP_NOT_FOUND":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Boutique introuvable",
-            },
-            { status: 404 },
-          );
-
-        case "USER_NOT_FOUND":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Utilisateur introuvable",
-            },
-            { status: 404 },
-          );
-
-        case "USER_INACTIVE":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Votre compte est désactivé",
-            },
-            { status: 403 },
-          );
-
-        case "USER_BANNED":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Votre compte est actuellement bloqué",
-            },
-            { status: 403 },
-          );
-
-        case "POS_NOT_FOUND":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Point de vente introuvable",
-            },
-            { status: 404 },
-          );
-
-        case "POS_INACTIVE":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Ce point de vente est actuellement désactivé",
-            },
-            { status: 400 },
-          );
-
-        case "POS_NOT_ASSIGNED":
-          return NextResponse.json(
-            {
-              success: false,
-              message:
-                "Vous n'êtes actuellement affecté à aucun point de vente",
-            },
-            { status: 403 },
-          );
-
-        case "STOCK_PRODUCT_NOT_FOUND":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Produit introuvable dans cet emplacement de stock",
-            },
-            { status: 404 },
-          );
       }
     }
+
+    // ========================================================
+    // ERREUR INATTENDUE
+    // ========================================================
 
     console.error("GET /api/v1/stock/[variantId]:", error);
 
@@ -158,7 +264,9 @@ export async function GET(request: Request, context: RouteContext) {
         success: false,
         message: "Une erreur interne est survenue",
       },
-      { status: 500 },
+      {
+        status: 500,
+      },
     );
   }
 }

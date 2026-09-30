@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-
 import type { Role } from "@/app/generated/prisma/client";
-
 import { authorize } from "@/lib/modules/auth/authorize";
-import { getStock } from "@/lib/modules/stock/stock.service";
+
+import { getStock, StockServiceError } from "@/lib/modules/stock/stock.service";
+
 import { stockQuerySchema } from "@/lib/modules/stock/stock.schema";
 
 const ALLOWED_ROLES: Role[] = ["MANAGER", "EMPLOYEE"];
@@ -28,17 +28,11 @@ export async function GET(request: Request) {
 
     const rawQuery = {
       locationType: url.searchParams.get("locationType") ?? undefined,
-
       pointOfSaleId: url.searchParams.get("pointOfSaleId") ?? undefined,
-
       category: url.searchParams.get("category") ?? undefined,
-
       search: url.searchParams.get("search") ?? undefined,
-
       lowStock: url.searchParams.get("lowStock") ?? undefined,
-
       page: url.searchParams.get("page") ?? undefined,
-
       limit: url.searchParams.get("limit") ?? undefined,
     };
 
@@ -84,38 +78,12 @@ export async function GET(request: Request) {
       },
     );
   } catch (error) {
-    if (error instanceof Error) {
-      switch (error.message) {
-        // ----------------------------------------------------
-        // AUTHENTIFICATION
-        // ----------------------------------------------------
+    // ========================================================
+    // ERREURS DU STOCK SERVICE
+    // ========================================================
 
-        case "UNAUTHORIZED":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Non autorisé",
-            },
-            {
-              status: 401,
-            },
-          );
-
-        // ----------------------------------------------------
-        // AUTORISATION
-        // ----------------------------------------------------
-
-        case "FORBIDDEN":
-          return NextResponse.json(
-            {
-              success: false,
-              message: "Accès interdit",
-            },
-            {
-              status: 403,
-            },
-          );
-
+    if (error instanceof StockServiceError) {
+      switch (error.code) {
         // ----------------------------------------------------
         // BOUTIQUE INTROUVABLE
         // ----------------------------------------------------
@@ -126,9 +94,7 @@ export async function GET(request: Request) {
               success: false,
               message: "Boutique introuvable",
             },
-            {
-              status: 404,
-            },
+            { status: 404 },
           );
 
         // ----------------------------------------------------
@@ -141,9 +107,7 @@ export async function GET(request: Request) {
               success: false,
               message: "Utilisateur introuvable",
             },
-            {
-              status: 404,
-            },
+            { status: 404 },
           );
 
         // ----------------------------------------------------
@@ -156,9 +120,7 @@ export async function GET(request: Request) {
               success: false,
               message: "Votre compte est désactivé",
             },
-            {
-              status: 403,
-            },
+            { status: 403 },
           );
 
         // ----------------------------------------------------
@@ -171,9 +133,20 @@ export async function GET(request: Request) {
               success: false,
               message: "Votre compte est actuellement bloqué",
             },
+            { status: 403 },
+          );
+
+        // ----------------------------------------------------
+        // ACCÈS INTERDIT
+        // ----------------------------------------------------
+
+        case "FORBIDDEN":
+          return NextResponse.json(
             {
-              status: 403,
+              success: false,
+              message: "Accès interdit",
             },
+            { status: 403 },
           );
 
         // ----------------------------------------------------
@@ -186,9 +159,7 @@ export async function GET(request: Request) {
               success: false,
               message: "Point de vente introuvable",
             },
-            {
-              status: 404,
-            },
+            { status: 404 },
           );
 
         // ----------------------------------------------------
@@ -201,9 +172,7 @@ export async function GET(request: Request) {
               success: false,
               message: "Ce point de vente est actuellement désactivé",
             },
-            {
-              status: 400,
-            },
+            { status: 400 },
           );
 
         // ----------------------------------------------------
@@ -217,13 +186,24 @@ export async function GET(request: Request) {
               message:
                 "Vous n'êtes actuellement affecté à aucun point de vente",
             },
-            {
-              status: 403,
-            },
+            { status: 403 },
           );
 
         // ----------------------------------------------------
-        // CATÉGORIE INVALIDE POUR L'EMPLACEMENT
+        // PDV REQUIS
+        // ----------------------------------------------------
+
+        case "POS_REQUIRED":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Le point de vente est requis pour cet emplacement",
+            },
+            { status: 400 },
+          );
+
+        // ----------------------------------------------------
+        // CATÉGORIE INVALIDE
         // ----------------------------------------------------
 
         case "INVALID_CATEGORY":
@@ -233,9 +213,7 @@ export async function GET(request: Request) {
               message:
                 "Cette catégorie de stock n'est pas disponible dans cet emplacement",
             },
-            {
-              status: 400,
-            },
+            { status: 400 },
           );
 
         // ----------------------------------------------------
@@ -248,9 +226,33 @@ export async function GET(request: Request) {
               success: false,
               message: "Produit introuvable dans cet emplacement de stock",
             },
+            { status: 404 },
+          );
+      }
+    }
+
+    // ========================================================
+    // ERREURS D'AUTHENTIFICATION
+    // ========================================================
+
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "UNAUTHORIZED":
+          return NextResponse.json(
             {
-              status: 404,
+              success: false,
+              message: "Non autorisé",
             },
+            { status: 401 },
+          );
+
+        case "FORBIDDEN":
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Accès interdit",
+            },
+            { status: 403 },
           );
       }
     }
