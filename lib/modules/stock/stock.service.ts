@@ -41,7 +41,6 @@ const decimalToNumber = (value: Prisma.Decimal): number => {
 
 const normalizeSearch = (search?: string) => {
   const value = search?.trim();
-
   return value || undefined;
 };
 
@@ -75,10 +74,12 @@ const buildStockLocation = (stockLocation: {
   return {
     type: stockLocation.type,
     pointOfSaleId: stockLocation.pointOfSaleId,
+
     name:
       stockLocation.type === "MAIN"
         ? "Boutique principale"
         : (stockLocation.pointOfSaleName ?? "Point de vente"),
+
     ...(stockLocation.type === "POS" && stockLocation.pointOfSaleCode
       ? {
           code: stockLocation.pointOfSaleCode,
@@ -100,6 +101,7 @@ const getUser = async (userId: string) => {
     where: {
       id: userId,
     },
+
     select: {
       id: true,
       role: true,
@@ -250,7 +252,6 @@ const resolveStockLocation = async (
   location?: StockLocationInput,
 ) => {
   const user = await getUser(userId);
-
   const shop = await getMainShop();
 
   // ====================================================
@@ -260,6 +261,8 @@ const resolveStockLocation = async (
   if (user.role === "MANAGER") {
     validateManagerAccess(user.id, shop.ownerId);
 
+    // Aucun emplacement demandé
+    // => stock principal par défaut
     if (!location) {
       return {
         user,
@@ -274,6 +277,7 @@ const resolveStockLocation = async (
       };
     }
 
+    // MAIN
     if (location.locationType === "MAIN") {
       return {
         user,
@@ -288,6 +292,7 @@ const resolveStockLocation = async (
       };
     }
 
+    // POS
     if (!location.pointOfSaleId) {
       throw new StockServiceError(
         "POS_REQUIRED",
@@ -325,6 +330,7 @@ const resolveStockLocation = async (
     );
   }
 
+  // Un employé ne peut jamais consulter MAIN
   if (location?.locationType === "MAIN") {
     throw new StockServiceError(
       "FORBIDDEN",
@@ -332,6 +338,7 @@ const resolveStockLocation = async (
     );
   }
 
+  // Un employé ne peut consulter que son POS
   if (
     location?.pointOfSaleId &&
     location.pointOfSaleId !== assignment.pointOfSaleId
@@ -372,20 +379,17 @@ const getRawIngredients = async (
     isLowStock: boolean;
     isActive: boolean;
   }>;
+
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
-
   const limit = query.limit ?? 20;
-
   const search = normalizeSearch(query.search);
 
-  const where = {
+  // On garde le where de base sans stockQty > 0
+  // afin que lowStock puisse aussi détecter les stocks à 0.
+  const baseWhere = {
     shopId,
-
-    stockQty: {
-      gt: 0,
-    },
 
     ...(search && {
       name: {
@@ -395,9 +399,13 @@ const getRawIngredients = async (
     }),
   };
 
+  // ====================================================
+  // STOCK FAIBLE
+  // ====================================================
+
   if (query.lowStock) {
     const ingredients = await prisma.rawIngredient.findMany({
-      where,
+      where: baseWhere,
 
       orderBy: [
         {
@@ -433,8 +441,11 @@ const getRawIngredients = async (
         id: ingredient.id,
         name: ingredient.name,
         unit: ingredient.unit,
+
         stockQty: decimalToNumber(ingredient.stockQty),
+
         minAlert: decimalToNumber(ingredient.minAlert),
+
         isLowStock: true,
         isActive: ingredient.isActive,
       })),
@@ -442,6 +453,18 @@ const getRawIngredients = async (
       pagination: buildPagination(page, limit, total),
     };
   }
+
+  // ====================================================
+  // STOCK NORMAL
+  // ====================================================
+
+  const where = {
+    ...baseWhere,
+
+    stockQty: {
+      gt: 0,
+    },
+  };
 
   const [total, ingredients] = await Promise.all([
     prisma.rawIngredient.count({
@@ -461,7 +484,6 @@ const getRawIngredients = async (
       ],
 
       skip: (page - 1) * limit,
-
       take: limit,
 
       select: {
@@ -514,20 +536,15 @@ const getPackagings = async (
     isLowStock: boolean;
     isActive: boolean;
   }>;
+
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
-
   const limit = query.limit ?? 20;
-
   const search = normalizeSearch(query.search);
 
-  const where = {
+  const baseWhere = {
     shopId,
-
-    stockQty: {
-      gt: 0,
-    },
 
     ...(search && {
       name: {
@@ -537,9 +554,13 @@ const getPackagings = async (
     }),
   };
 
+  // ====================================================
+  // STOCK FAIBLE
+  // ====================================================
+
   if (query.lowStock) {
     const packagings = await prisma.packaging.findMany({
-      where,
+      where: baseWhere,
 
       orderBy: [
         {
@@ -587,6 +608,18 @@ const getPackagings = async (
     };
   }
 
+  // ====================================================
+  // STOCK NORMAL
+  // ====================================================
+
+  const where = {
+    ...baseWhere,
+
+    stockQty: {
+      gt: 0,
+    },
+  };
+
   const [total, packagings] = await Promise.all([
     prisma.packaging.count({
       where,
@@ -605,7 +638,6 @@ const getPackagings = async (
       ],
 
       skip: (page - 1) * limit,
-
       take: limit,
 
       select: {
@@ -628,7 +660,9 @@ const getPackagings = async (
       capacityMl: packaging.capacityMl,
       stockQty: packaging.stockQty,
       minAlert: packaging.minAlert,
+
       isLowStock: packaging.stockQty <= packaging.minAlert,
+
       isActive: packaging.isActive,
     })),
 
@@ -661,12 +695,11 @@ const getFinishedProducts = async (
     shelfLifeDays: number;
     isActive: boolean;
   }>;
+
   pagination: Pagination;
 }> => {
   const page = query.page ?? 1;
-
   const limit = query.limit ?? 20;
-
   const search = normalizeSearch(query.search);
 
   const where = {
@@ -706,7 +739,6 @@ const getFinishedProducts = async (
       },
 
       skip: (page - 1) * limit,
-
       take: limit,
 
       select: {
@@ -750,16 +782,27 @@ const getFinishedProducts = async (
       id: stock.id,
       variantId: stock.variant.id,
       productId: stock.variant.product.id,
+
       productName: stock.variant.product.name,
+
       productImage: stock.variant.product.image,
+
       sku: stock.variant.sku,
+
       price: decimalToNumber(stock.variant.price),
+
       packagingId: stock.variant.packaging.id,
+
       packagingName: stock.variant.packaging.name,
+
       packagingSize: stock.variant.packaging.size,
+
       capacityMl: stock.variant.packaging.capacityMl,
+
       quantity: stock.quantity,
+
       shelfLifeDays: stock.variant.shelfLifeDays,
+
       isActive: stock.variant.isActive && stock.variant.product.isActive,
     })),
 
@@ -775,6 +818,46 @@ const getStockSummary = async (
   shopId: string,
   pointOfSaleId: string | null,
 ) => {
+  // ----------------------------------------------------
+  // Si on consulte un POS :
+  // seules les informations de produits finis
+  // sont pertinentes.
+  // ----------------------------------------------------
+
+  if (pointOfSaleId) {
+    const finishedProducts = await prisma.finishedStock.findMany({
+      where: {
+        shopId,
+        pointOfSaleId,
+        quantity: {
+          gt: 0,
+        },
+      },
+
+      select: {
+        quantity: true,
+      },
+    });
+
+    return {
+      rawIngredientsCount: 0,
+      packagingCount: 0,
+      finishedProductsCount: finishedProducts.length,
+
+      lowStockRawIngredientsCount: 0,
+      lowStockPackagingCount: 0,
+
+      totalFinishedQuantity: finishedProducts.reduce(
+        (total, item) => total + item.quantity,
+        0,
+      ),
+    };
+  }
+
+  // ----------------------------------------------------
+  // MAIN
+  // ----------------------------------------------------
+
   const [rawIngredients, packagings, finishedProducts] = await Promise.all([
     prisma.rawIngredient.findMany({
       where: {
@@ -807,7 +890,7 @@ const getStockSummary = async (
     prisma.finishedStock.findMany({
       where: {
         shopId,
-        pointOfSaleId,
+        pointOfSaleId: null,
         quantity: {
           gt: 0,
         },
@@ -862,6 +945,10 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
 
   const location = buildStockLocation(stockLocation);
 
+  // ====================================================
+  // MATIÈRES PREMIÈRES
+  // ====================================================
+
   if (query.category === "RAW_INGREDIENT") {
     if (stockLocation.type !== "MAIN") {
       throw new StockServiceError(
@@ -880,6 +967,10 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
       summary,
     };
   }
+
+  // ====================================================
+  // EMBALLAGES
+  // ====================================================
 
   if (query.category === "PACKAGING") {
     if (stockLocation.type !== "MAIN") {
@@ -900,6 +991,10 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
     };
   }
 
+  // ====================================================
+  // PRODUITS FINIS
+  // ====================================================
+
   if (query.category === "FINISHED_PRODUCT") {
     const result = await getFinishedProducts(
       shop.id,
@@ -916,11 +1011,16 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
     };
   }
 
+  // ====================================================
+  // TOUTES LES CATÉGORIES
+  // ====================================================
+
   const rawIngredients =
     stockLocation.type === "MAIN"
       ? await getRawIngredients(shop.id, query)
       : {
           items: [],
+
           pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
         };
 
@@ -929,6 +1029,7 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
       ? await getPackagings(shop.id, query)
       : {
           items: [],
+
           pagination: buildPagination(query.page ?? 1, query.limit ?? 20, 0),
         };
 
@@ -940,20 +1041,24 @@ export const getStock = async (userId: string, query: StockQueryInput) => {
 
   return {
     location,
+
     categories: {
       rawIngredients: {
         items: rawIngredients.items,
         pagination: rawIngredients.pagination,
       },
+
       packagings: {
         items: packagings.items,
         pagination: packagings.pagination,
       },
+
       finishedProducts: {
         items: finishedProducts.items,
         pagination: finishedProducts.pagination,
       },
     },
+
     summary,
   };
 };
@@ -1042,12 +1147,14 @@ export const getStockProduct = async (
         },
 
         take: 20,
+
         select: {
           id: true,
           quantity: true,
           origin: true,
           note: true,
           createdAt: true,
+
           productionItem: {
             select: {
               id: true,
@@ -1079,15 +1186,18 @@ export const getStockProduct = async (
 
   return {
     location: locationInfo,
+
     stock: {
       id: finishedStock.id,
       variantId: finishedStock.variant.id,
       productId: finishedStock.variant.product.id,
+
       productName: finishedStock.variant.product.name,
       productImage: finishedStock.variant.product.image,
       sku: finishedStock.variant.sku,
       price: decimalToNumber(finishedStock.variant.price),
       packagingId: finishedStock.variant.packaging.id,
+
       packagingName: finishedStock.variant.packaging.name,
       packagingSize: finishedStock.variant.packaging.size,
       capacityMl: finishedStock.variant.packaging.capacityMl,
@@ -1098,9 +1208,7 @@ export const getStockProduct = async (
 
     lots: finishedStock.lots.map((lot) => ({
       id: lot.id,
-
       quantity: lot.quantity,
-
       remainingQuantity: lot.remainingQuantity,
       expiresAt: lot.expiresAt?.toISOString() ?? null,
       createdAt: lot.createdAt.toISOString(),
@@ -1114,11 +1222,11 @@ export const getStockProduct = async (
       origin: entry.origin,
       note: entry.note,
       createdAt: entry.createdAt.toISOString(),
-
       createdBy: {
         id: entry.createdBy.id,
         name: entry.createdBy.name,
       },
+
       productionItemId: entry.productionItem?.id ?? null,
     })),
   };

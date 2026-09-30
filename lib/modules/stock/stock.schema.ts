@@ -17,6 +17,7 @@ export const stockLocationSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    // POS => pointOfSaleId obligatoire
     if (data.locationType === "POS" && !data.pointOfSaleId) {
       ctx.addIssue({
         code: "custom",
@@ -25,6 +26,7 @@ export const stockLocationSchema = z
       });
     }
 
+    // MAIN => aucun pointOfSaleId
     if (data.locationType === "MAIN" && data.pointOfSaleId) {
       ctx.addIssue({
         code: "custom",
@@ -53,48 +55,102 @@ export type StockCategory = z.infer<typeof stockCategorySchema>;
 // FILTRES DU STOCK
 // ======================================================
 
-export const stockQuerySchema = z.object({
-  locationType: z
-    .enum(["MAIN", "POS"], {
-      error: "Le type d'emplacement est invalide",
-    })
-    .optional(),
+export const stockQuerySchema = z
+  .object({
+    // --------------------------------------------------
+    // Emplacement
+    // --------------------------------------------------
 
-  pointOfSaleId: z
-    .string()
-    .trim()
-    .min(1, "L'identifiant du point de vente est invalide")
-    .optional(),
+    locationType: z
+      .enum(["MAIN", "POS"], {
+        error: "Le type d'emplacement est invalide",
+      })
+      .optional(),
 
-  category: stockCategorySchema.optional(),
+    pointOfSaleId: z
+      .string()
+      .trim()
+      .min(1, "L'identifiant du point de vente est invalide")
+      .optional(),
 
-  search: z
-    .string()
-    .trim()
-    .max(100, "La recherche ne peut pas dépasser 100 caractères")
-    .optional(),
+    // --------------------------------------------------
+    // Catégorie
+    // --------------------------------------------------
 
-  lowStock: z.coerce
-    .boolean({
-      error: "Le filtre de stock faible est invalide",
-    })
-    .optional(),
+    category: stockCategorySchema.optional(),
 
-  page: z.coerce
-    .number()
-    .int()
-    .min(1, "La page doit être supérieure ou égale à 1")
-    .optional()
-    .default(1),
+    // --------------------------------------------------
+    // Recherche
+    // --------------------------------------------------
 
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1, "La limite doit être supérieure ou égale à 1")
-    .max(50, "La limite ne peut pas dépasser 50")
-    .optional()
-    .default(20),
-});
+    search: z
+      .string()
+      .trim()
+      .max(100, "La recherche ne peut pas dépasser 100 caractères")
+      .optional(),
+
+    // --------------------------------------------------
+    // Stock faible
+    // --------------------------------------------------
+
+    lowStock: z.coerce
+      .boolean({
+        error: "Le filtre de stock faible est invalide",
+      })
+      .optional(),
+
+    // --------------------------------------------------
+    // Pagination
+    // --------------------------------------------------
+
+    page: z.coerce
+      .number()
+      .int()
+      .min(1, "La page doit être supérieure ou égale à 1")
+      .optional()
+      .default(1),
+
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1, "La limite doit être supérieure ou égale à 1")
+      .max(50, "La limite ne peut pas dépasser 50")
+      .optional()
+      .default(20),
+  })
+  .superRefine((data, ctx) => {
+    // ==================================================
+    // COHÉRENCE DE L'EMPLACEMENT
+    // ==================================================
+
+    // POS => pointOfSaleId obligatoire
+    if (data.locationType === "POS" && !data.pointOfSaleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pointOfSaleId"],
+        message: "Le point de vente est requis.",
+      });
+    }
+
+    // MAIN => pointOfSaleId interdit
+    if (data.locationType === "MAIN" && data.pointOfSaleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pointOfSaleId"],
+        message: "Le stock principal ne nécessite pas de point de vente.",
+      });
+    }
+
+    // pointOfSaleId sans locationType => incohérent
+    if (!data.locationType && data.pointOfSaleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["locationType"],
+        message:
+          "Le type d'emplacement est requis lorsqu'un point de vente est fourni.",
+      });
+    }
+  });
 
 export type StockQueryInput = z.infer<typeof stockQuerySchema>;
 
