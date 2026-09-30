@@ -3,9 +3,7 @@ import { NextResponse } from "next/server";
 import type { Role } from "@/app/generated/prisma/client";
 
 import ShopService from "@/lib/modules/shop/shop.service";
-
 import { updateShopSchema } from "@/lib/modules/shop/shop.schema";
-
 import { authorize } from "@/lib/modules/auth/authorize";
 
 const VIEW_ROLES: Role[] = ["MANAGER", "EMPLOYEE"];

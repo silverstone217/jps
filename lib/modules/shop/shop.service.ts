@@ -240,6 +240,31 @@ export class ShopService {
       loyaltyDiscountAmount: Number(shop.loyaltyDiscountAmount),
     };
   }
+
+  static async getPublicShop() {
+    const shop = await prisma.shop.findFirst({
+      where: {
+        singleton: "MAIN",
+      },
+      select: {
+        id: true,
+        singleton: true,
+        name: true,
+        logo: true,
+        slogan: true,
+        telephone: true,
+        email: true,
+        address: true,
+        currency: true,
+      },
+    });
+
+    if (!shop) {
+      throw new Error("SHOP_NOT_FOUND");
+    }
+
+    return shop;
+  }
 }
 
 export default ShopService;
