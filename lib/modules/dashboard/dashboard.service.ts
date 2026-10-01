@@ -15,7 +15,6 @@ export type DashboardStock = {
 
 export type DashboardRecentOrder = {
   id: string;
-  pointOfSaleName: string;
   createdAt: Date;
 };
 
@@ -26,33 +25,26 @@ export type DashboardOrders = {
 
 export type ManagerDashboard = {
   role: "MANAGER";
-
   stock: {
     main: DashboardStock;
   };
-
   employees: {
     total: number;
   };
-
   pointOfSales: {
     total: number;
   };
-
   orders: DashboardOrders;
 };
 
 export type EmployeeDashboard = {
   role: "EMPLOYEE";
-
   pointOfSale: {
     id: string;
     name: string;
     code: string;
   } | null;
-
   stock: DashboardStock;
-
   orders: DashboardOrders;
 };
 
@@ -86,6 +78,43 @@ export class DashboardService {
     }
 
     return shop;
+  }
+
+  /**
+   * ==========================================================
+   * Récupérer le point de vente actif d'un utilisateur
+   * ==========================================================
+   *
+   * Utilisé aussi bien pour le manager que pour l'employé.
+   *
+   * Le POS est déterminé par l'affectation active.
+   */
+
+  private static async getActivePointOfSale(userId: string, shopId: string) {
+    const assignment = await prisma.staffAssignment.findFirst({
+      where: {
+        userId,
+        shopId,
+        isActive: true,
+        pointOfSale: {
+          isActive: true,
+        },
+      },
+      select: {
+        pointOfSale: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+    });
+
+    return assignment?.pointOfSale ?? null;
   }
 
   /**
@@ -176,43 +205,36 @@ export class DashboardService {
    * Récupérer les 3 dernières commandes
    * ==========================================================
    *
-   * On utilise Invoice pour l'historique durable.
+   * Les commandes sont récupérées depuis Invoice.
    *
-   * Manager :
-   * → toutes les factures.
+   * Uniquement les commandes du POS concerné.
    *
-   * Employee :
-   * → uniquement les factures de son POS.
+   * Si aucun POS n'est disponible :
+   * → aucune commande récente.
    */
 
   private static async getRecentOrders(
-    pointOfSaleId?: string,
+    pointOfSaleId: string | null,
   ): Promise<DashboardRecentOrder[]> {
-    const invoices = await prisma.invoice.findMany({
-      where: pointOfSaleId
-        ? {
-            pointOfSaleId,
-          }
-        : undefined,
+    if (!pointOfSaleId) {
+      return [];
+    }
 
+    const invoices = await prisma.invoice.findMany({
+      where: {
+        pointOfSaleId,
+      },
       select: {
         id: true,
-        pointOfSaleName: true,
         createdAt: true,
       },
-
       orderBy: {
         createdAt: "desc",
       },
-
       take: 3,
     });
 
-    return invoices.map((invoice) => ({
-      id: invoice.id,
-      pointOfSaleName: invoice.pointOfSaleName,
-      createdAt: invoice.createdAt,
-    }));
+    return invoices;
   }
 
   /**
@@ -227,7 +249,7 @@ export class DashboardService {
   ): Promise<DashboardOrders> {
     const [today, recent] = await Promise.all([
       this.getOrdersToday(shopId, pointOfSaleId),
-      this.getRecentOrders(pointOfSaleId),
+      this.getRecentOrders(pointOfSaleId ?? null),
     ]);
 
     return {
@@ -246,13 +268,16 @@ export class DashboardService {
    * - le stock central de produits finis
    * - le nombre d'employés actifs
    * - le nombre de POS actifs
-   * - les commandes du jour
-   * - les 3 dernières commandes
+   * - toutes les commandes du jour de la boutique
+   * - les 3 dernières commandes de son POS actif
    */
 
   private static async getManagerDashboard(
+    userId: string,
     shopId: string,
   ): Promise<ManagerDashboard> {
+    const pointOfSale = await this.getActivePointOfSale(userId, shopId);
+
     const [stock, employeesTotal, pointOfSalesTotal, orders] =
       await Promise.all([
         this.getFinishedStock(null),
@@ -271,7 +296,7 @@ export class DashboardService {
           },
         }),
 
-        this.getOrdersDashboard(shopId),
+        this.getOrdersDashboard(shopId, pointOfSale?.id),
       ]);
 
     return {
@@ -307,36 +332,12 @@ export class DashboardService {
     userId: string,
     shopId: string,
   ): Promise<EmployeeDashboard> {
-    const assignment = await prisma.staffAssignment.findFirst({
-      where: {
-        userId,
-        shopId,
-        isActive: true,
-        pointOfSale: {
-          isActive: true,
-        },
-      },
-
-      select: {
-        pointOfSale: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
-
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
+    const pointOfSale = await this.getActivePointOfSale(userId, shopId);
 
     /**
      * Aucun POS affecté.
      */
-
-    if (!assignment) {
+    if (!pointOfSale) {
       return {
         role: "EMPLOYEE",
 
@@ -353,8 +354,6 @@ export class DashboardService {
         },
       };
     }
-
-    const pointOfSale = assignment.pointOfSale;
 
     const [stock, orders] = await Promise.all([
       this.getFinishedStock(pointOfSale.id),
@@ -387,7 +386,7 @@ export class DashboardService {
     const shop = await this.getMainShop();
 
     if (role === "MANAGER") {
-      return this.getManagerDashboard(shop.id);
+      return this.getManagerDashboard(userId, shop.id);
     }
 
     if (role === "EMPLOYEE") {
